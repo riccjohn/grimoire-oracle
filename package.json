@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -15,7 +16,7 @@
     "@langchain/textsplitters": "^1.0.1",
     "hnswlib-node": "^3.0.0",
     "ink": "^6.6.0",
-    "langchain": "^1.2.11",
+    "langchain": "^1.2.12",
     "react": "^19.2.3"
   },
   "devDependencies": {
