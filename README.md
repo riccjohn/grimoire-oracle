@@ -10,3 +10,14 @@ Can be installed at [ollama.com](https://ollama.com/)
 Make sure to launch the Ollama app manually first. Ollama installs the CLI tools upon first launch.
 
 Run the setup script `./scripts/setup.sh` to install the Ollama models
+
+## Using the Grimoire
+
+After cloning, you need to build the vector index from the vault data:
+
+```bash
+npm install
+npx tsx ingest.ts
+```
+
+This creates the `grimoire_index/` folder containing the searchable vector database. You only need to run this once, or again if you update the files in `vault/`.
