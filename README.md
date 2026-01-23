@@ -1,6 +1,8 @@
 # The Grimoire Oracle
 An Oracle for OSE powered by Langchain and a local LLM
 
+OSE data from [Old School Essentials Markdown](https://github.com/Obsidian-TTRPG-Community/Old-School-Essentials-Markdown)
+
 ## Prerequisites
 
 ### Ollama
