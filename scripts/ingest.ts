@@ -69,7 +69,7 @@ const createVectorIndex = async (
 	const vectorStore = await HNSWLib.fromDocuments(chunks, embedder);
 
 	await vectorStore.save(pathToStore);
-	console.log('✅ Index saved to ./grimoire_index');
+	console.log('✅ Index saved to grimoire_index/');
 };
 
 main();

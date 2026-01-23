@@ -13,11 +13,11 @@ Run the setup script `./scripts/setup.sh` to install the Ollama models
 
 ## Using the Grimoire
 
-After cloning, you need to build the vector index from the vault data:
+After cloning, you need to build the vector index from the vault data. All commands must be run from the project root directory:
 
 ```bash
 npm install
-npx tsx ingest.ts
+npx tsx scripts/ingest.ts
 ```
 
 This creates the `grimoire_index/` folder containing the searchable vector database. You only need to run this once, or again if you update the files in `vault/`.

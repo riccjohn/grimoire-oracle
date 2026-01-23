@@ -19,7 +19,7 @@ The Grimoire Oracle is a TTRPG AI assistant that provides rule lookups using loc
 
 ```bash
 ./scripts/setup.sh       # Pull required Ollama models (first-time setup)
-npx tsx ingest.ts        # Build vector index from vault markdown files
+npx tsx scripts/ingest.ts  # Build vector index from vault markdown files
 npx tsx src/index.tsx    # Launch terminal UI
 ```
 
@@ -31,9 +31,9 @@ Run TypeScript files directly with tsx (no build step). No test or lint commands
 
 1. **Data Layer (Vault)** - `vault/` contains markdown files with OSE TTRPG rules, organized by category (Characters, Classes, Running Adventures)
 
-2. **Ingestion Layer** - `ingest.ts` converts vault markdown into a searchable vector index stored at `./grimoire_index` using HNSWLib and Ollama embeddings
+2. **Ingestion Layer** - `scripts/ingest.ts` converts vault markdown into a searchable vector index stored at `grimoire_index/` using HNSWLib and Ollama embeddings
 
-3. **AI Logic Layer** - `oracle-logic.ts` implements history-aware RAG using LangChain chains:
+3. **AI Logic Layer** - `src/oracle-logic.ts` implements history-aware RAG using LangChain chains:
    - `createHistoryAwareRetriever` - rephrases follow-up questions using chat history
    - `createStuffDocumentsChain` - synthesizes retrieved documents into responses
    - `createRetrievalChain` - orchestrates the full pipeline
