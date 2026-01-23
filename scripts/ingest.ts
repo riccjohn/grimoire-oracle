@@ -5,7 +5,7 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
 
-const CHUNK_SIZE = 500;
+const CHUNK_SIZE = 250;
 const CHUNK_OVERLAP = 50;
 const GRIMOIRE_INDEX_PATH = './grimoire_index';
 
