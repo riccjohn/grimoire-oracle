@@ -64,9 +64,7 @@ const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 const enrichChunksWithMetadata = (chunks: Document<Record<string, any>>[]) => {
 	return chunks.map((chunk) => {
 		const filepath = chunk.metadata.source;
-		console.log('FILENAME =>', filepath);
 		const title = extractTitleFromPath(filepath);
-		console.log('TITLE =>', title);
 		chunk.pageContent = `[${title}]\n${chunk.pageContent}`;
 		return chunk;
 	});
@@ -91,16 +89,22 @@ const createVectorIndex = async (
 };
 
 /**
- * Extracts a clean title from a file path.
- * Removes the .md extension and leading number prefixes (e.g., "1. " or "4-").
+ * Extracts a breadcrumb-style title from a file path.
+ * Keeps the full path after vault/, cleans number prefixes from each segment.
  * @param filepath - Full path to the markdown file
- * @returns Clean title string (e.g., "vault/rules/1. Light.md" -> "Light")
+ * @returns Breadcrumb string (e.g., "vault/rules/5. Adventures/4. Hazards.md" -> "rules > Adventures > Hazards")
  */
 const extractTitleFromPath = (filepath: string) => {
-	const splitFilePath = filepath.split('/');
-	const file = splitFilePath[splitFilePath.length - 1] ?? '';
-	const title = file.replace(/\.md$/, '').replace(/^\d+[\.\-]\s*/, '');
-	return title;
+	const vaultIndex = filepath.indexOf('vault/');
+	const relativePath = vaultIndex !== -1
+		? filepath.slice(vaultIndex + 'vault/'.length)
+		: filepath;
+
+	return relativePath
+		.replace(/\.md$/, '')
+		.split('/')
+		.map((segment) => segment.replace(/^\d+[\.\-]\s*/, ''))
+		.join(' > ');
 };
 
 main();
