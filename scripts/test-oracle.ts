@@ -1,15 +1,31 @@
+import { AIMessage, HumanMessage } from 'langchain';
 import { setupOracle } from './oracle-logic.js';
 
 const main = async () => {
 	console.log('🔮 Starting oracle...\n');
 	const oracle = await setupOracle();
 
-	const question = 'How much damage does a character take from a 30 foot fall?';
+	const firstQuestion = 'Tell me about the Light Spell';
+	console.log(`You: ${firstQuestion}`);
 
-	console.log(`Question: ${question}\n`);
+	const firstResponse = await oracle.invoke({
+		input: firstQuestion,
+		chat_history: [],
+	});
+	console.log(`Oracle: ${firstResponse.answer}\n\n`);
 
-	const response = await oracle.invoke({ input: question });
-	console.log(`Answer: ${response.answer}\n`);
+	const secondQuestion = 'How long does it last?';
+	console.log(`You: ${secondQuestion}`);
+
+	const secondResponse = await oracle.invoke({
+		input: secondQuestion,
+		chatHistory: [
+			new HumanMessage(firstQuestion),
+			new AIMessage(firstResponse.answer),
+		],
+	});
+
+	console.log(`Oracle: ${secondResponse.answer}\n\n`);
 };
 
 main();

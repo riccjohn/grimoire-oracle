@@ -1,7 +1,7 @@
 import { DirectoryLoader } from '@langchain/classic/document_loaders/fs/directory';
 import type { Document } from '@langchain/core/documents';
 import { TextLoader } from '@langchain/classic/document_loaders/fs/text';
-import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { MarkdownTextSplitter } from '@langchain/textsplitters'
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
 
@@ -42,7 +42,7 @@ const loadVaultDocs = async (docPath: string) => {
  */
 const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 	console.log('\n✂️ Splitting into chunks...');
-	const splitter = new RecursiveCharacterTextSplitter({
+	const splitter = new MarkdownTextSplitter({
 		chunkSize: CHUNK_SIZE,
 		chunkOverlap: CHUNK_OVERLAP,
 	});
