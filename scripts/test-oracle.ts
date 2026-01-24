@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage } from 'langchain';
-import { setupOracle } from './oracle-logic.js';
+import { setupOracle } from '../src/oracle-logic.js';
 
 const main = async () => {
 	console.log('🔮 Starting oracle...\n');

@@ -7,7 +7,7 @@ const main = async () => {
 	const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
 	const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
 
-	const query = 'conjuring light 15 radius';
+	const query = 'Conjuring light in a 15 radius';
 
 	const results = await vectorStore.similaritySearch(query, 10);
 
