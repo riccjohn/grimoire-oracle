@@ -5,14 +5,16 @@ import { MarkdownTextSplitter } from '@langchain/textsplitters';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
 
-const CHUNK_SIZE = 250;
-const CHUNK_OVERLAP = 50;
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 100;
+const MIN_CHUNK_SIZE = 100;
 const GRIMOIRE_INDEX_PATH = './grimoire_index';
 
 const main = async () => {
 	const docs = await loadVaultDocs('./vault');
 	const chunks = await splitDocsIntoChunks(docs);
-	const enrichedChunks = enrichChunksWithMetadata(chunks);
+	const mergedChunks = mergeSmallChunks(chunks);
+	const enrichedChunks = enrichChunksWithMetadata(mergedChunks);
 	createVectorIndex(enrichedChunks, GRIMOIRE_INDEX_PATH);
 };
 
@@ -51,8 +53,55 @@ const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 	const chunks = await splitter.splitDocuments(docs);
 
 	console.log(`✅ Created ${chunks.length} chunks:\n`);
+	console.log('Sample chunk lengths:', chunks.slice(0, 20).map(c => c.pageContent.length));
 
 	return chunks;
+};
+
+/**
+ * Merges small chunks with the following chunk from the same document.
+ * Prevents orphaned headers from becoming standalone chunks.
+ * @param chunks - Array of Document chunks
+ * @returns Array with small chunks merged into their neighbors
+ */
+const mergeSmallChunks = (chunks: Document<Record<string, unknown>>[]) => {
+	console.log('\n🔗 Merging small chunks...');
+
+	const result = chunks.reduce<{
+		merged: Document<Record<string, unknown>>[];
+		skipNext: boolean;
+	}>(
+		(acc, current, index) => {
+			if (acc.skipNext) {
+				return { merged: acc.merged, skipNext: false };
+			}
+
+			const next = chunks[index + 1];
+			const shouldMerge =
+				current.pageContent.length < MIN_CHUNK_SIZE &&
+				next &&
+				current.metadata.source === next.metadata.source;
+
+			if (shouldMerge) {
+				return {
+					merged: [
+						...acc.merged,
+						{
+							pageContent: current.pageContent + '\n\n' + next.pageContent,
+							metadata: current.metadata,
+						},
+					],
+					skipNext: true,
+				};
+			}
+
+			return { merged: [...acc.merged, current], skipNext: false };
+		},
+		{ merged: [], skipNext: false },
+	);
+
+	console.log(`✅ Merged ${chunks.length} → ${result.merged.length} chunks`);
+	return result.merged;
 };
 
 /**
