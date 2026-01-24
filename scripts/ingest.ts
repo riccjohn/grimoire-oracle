@@ -1,7 +1,7 @@
 import { DirectoryLoader } from '@langchain/classic/document_loaders/fs/directory';
 import type { Document } from '@langchain/core/documents';
 import { TextLoader } from '@langchain/classic/document_loaders/fs/text';
-import { MarkdownTextSplitter } from '@langchain/textsplitters'
+import { MarkdownTextSplitter } from '@langchain/textsplitters';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
 
@@ -12,7 +12,8 @@ const GRIMOIRE_INDEX_PATH = './grimoire_index';
 const main = async () => {
 	const docs = await loadVaultDocs('./vault');
 	const chunks = await splitDocsIntoChunks(docs);
-	createVectorIndex(chunks, GRIMOIRE_INDEX_PATH);
+	const enrichedChunks = enrichChunksWithMetadata(chunks);
+	createVectorIndex(enrichedChunks, GRIMOIRE_INDEX_PATH);
 };
 
 /**
@@ -55,6 +56,23 @@ const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 };
 
 /**
+ * Prepends document title to each chunk's content to improve retrieval.
+ * Helps embedding models match user queries like "Light spell" to relevant chunks.
+ * @param chunks - Array of Document chunks with metadata.source containing file paths
+ * @returns Array of chunks with titles prepended to pageContent
+ */
+const enrichChunksWithMetadata = (chunks: Document<Record<string, any>>[]) => {
+	return chunks.map((chunk) => {
+		const filepath = chunk.metadata.source;
+		console.log('FILENAME =>', filepath);
+		const title = extractTitleFromPath(filepath);
+		console.log('TITLE =>', title);
+		chunk.pageContent = `[${title}]\n${chunk.pageContent}`;
+		return chunk;
+	});
+};
+
+/**
  * Converts document chunks into vector embeddings and saves the index to disk.
  * Uses Ollama's nomic-embed-text model for embedding generation.
  * @param chunks - Document chunks to vectorize
@@ -70,6 +88,19 @@ const createVectorIndex = async (
 
 	await vectorStore.save(pathToStore);
 	console.log('✅ Index saved to grimoire_index/');
+};
+
+/**
+ * Extracts a clean title from a file path.
+ * Removes the .md extension and leading number prefixes (e.g., "1. " or "4-").
+ * @param filepath - Full path to the markdown file
+ * @returns Clean title string (e.g., "vault/rules/1. Light.md" -> "Light")
+ */
+const extractTitleFromPath = (filepath: string) => {
+	const splitFilePath = filepath.split('/');
+	const file = splitFilePath[splitFilePath.length - 1] ?? '';
+	const title = file.replace(/\.md$/, '').replace(/^\d+[\.\-]\s*/, '');
+	return title;
 };
 
 main();
