@@ -5,7 +5,7 @@ const main = async () => {
 	console.log('🔮 Starting oracle...\n');
 	const oracle = await setupOracle();
 
-	const firstQuestion = 'Tell me about the Light Spell';
+	const firstQuestion = 'Tell me about the Thief class';
 	console.log(`You: ${firstQuestion}`);
 
 	const firstResponse = await oracle.invoke({
@@ -14,12 +14,12 @@ const main = async () => {
 	});
 	console.log(`Oracle: ${firstResponse.answer}\n\n`);
 
-	const secondQuestion = 'How long does it last?';
+	const secondQuestion = 'What skills do they have?';
 	console.log(`You: ${secondQuestion}`);
 
 	const secondResponse = await oracle.invoke({
 		input: secondQuestion,
-		chatHistory: [
+		chat_history: [
 			new HumanMessage(firstQuestion),
 			new AIMessage(firstResponse.answer),
 		],
