@@ -8,16 +8,28 @@ import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { createStuffDocumentsChain } from '@langchain/classic/chains/combine_documents';
 import { createHistoryAwareRetriever } from '@langchain/classic/chains/history_aware_retriever';
 import type { BaseMessage } from '@langchain/core/messages';
+import type { Document } from '@langchain/core/documents';
 
 const RETRIEVAL_K = 3;
+
+type OracleOptions = {
+	debug?: boolean;
+};
 
 /**
  * Sets up the conversational RAG (Retrieval Augmented Generation) chain.
  *
+ * @param options.debug - Enable debug logging to see retrieved documents
+ *
  * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
  * and returns { input, chat_history, context: Document[], answer: string }
  */
-export const setupOracle = async () => {
+export const setupOracle = async (options: OracleOptions = {}) => {
+	const { debug = false } = options;
+
+	const debugLog = (...args: unknown[]) => {
+		if (debug) console.log('[DEBUG]', ...args);
+	};
 	// Core components: LLM for chat, embeddings for vector search, vector store for retrieval
 	const model = new ChatOllama({ model: 'llama3', temperature: 0.2 });
 	const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
@@ -85,7 +97,18 @@ Context:
 		// First step: retrieve relevant documents based on rephrased query
 		RunnablePassthrough.assign({
 			context: async (input: { input: string; chat_history: BaseMessage[] }) => {
-				return historyAwareRetriever.invoke(input);
+				debugLog('Input query:', input.input);
+				debugLog('Chat history length:', input.chat_history.length);
+
+				const docs: Document[] = await historyAwareRetriever.invoke(input);
+
+				debugLog(`Retrieved ${docs.length} documents:`);
+				docs.forEach((doc, i) => {
+					debugLog(`  [${i + 1}] ${doc.metadata.source}`);
+					debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
+				});
+
+				return docs;
 			},
 		}),
 		// Second step: generate answer using retrieved context

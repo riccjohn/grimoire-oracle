@@ -7,7 +7,7 @@ const main = async () => {
 	const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
 	const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
 
-	const query = 'Thief skills climb hide shadows';
+	const query = 'Tell me about the Thief class';
 
 	const results = await vectorStore.similaritySearch(query, 10);
 
