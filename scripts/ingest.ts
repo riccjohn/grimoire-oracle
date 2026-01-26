@@ -138,10 +138,11 @@ const createVectorIndex = async (
 };
 
 /**
- * Extracts a breadcrumb-style title from a file path.
- * Keeps the full path after vault/, cleans number prefixes from each segment.
+ * Extracts a searchable title from a file path.
+ * For class files, returns just the class name (e.g., "Thief").
+ * For other files, returns breadcrumb format (e.g., "Monsters > Dragon").
  * @param filepath - Full path to the markdown file
- * @returns Breadcrumb string (e.g., "vault/rules/5. Adventures/4. Hazards.md" -> "rules > Adventures > Hazards")
+ * @returns Title string optimized for embedding similarity
  */
 const extractTitleFromPath = (filepath: string) => {
 	const vaultIndex = filepath.indexOf('vault/');
@@ -149,10 +150,24 @@ const extractTitleFromPath = (filepath: string) => {
 		? filepath.slice(vaultIndex + 'vault/'.length)
 		: filepath;
 
-	return relativePath
+	const segments = relativePath
 		.replace(/\.md$/, '')
 		.split('/')
-		.map((segment) => segment.replace(/^\d+[\.\-]\s*/, ''))
+		.map((segment) => segment.replace(/^\d+[a-z]?[\.\-]\s*/, ''));
+
+	// For class files, return "X Class" for better matching with queries like
+	// "Tell me about the Thief class" -> matches "[Thief Class]"
+	if (segments.includes('Classes') && segments.length >= 2) {
+		const className = segments[segments.length - 1];
+		// Skip generic files like "Character Classes"
+		if (className !== 'Character Classes') {
+			return `${className} Class`;
+		}
+	}
+
+	// For other files, use breadcrumb but skip "rules" prefix
+	return segments
+		.filter((s) => s !== 'rules')
 		.join(' > ');
 };
 
