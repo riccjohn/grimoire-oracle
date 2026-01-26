@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a learning project for understanding LangChain and RAG concepts. The app itself (a TTRPG rule lookup assistant) is just a vehicle for learning—the primary goal is to understand how LangChain works, not to build a polished product.
 
+**Note:** When the `lang-chain-tutor` skill is active, prioritize teaching through explanation and guidance rather than writing code directly. See `tutorial.md` for the step-by-step implementation guide.
+
 ## Overview
 
 The Grimoire Oracle is a TTRPG AI assistant that provides rule lookups using local LLMs and RAG (Retrieval Augmented Generation). It uses LangChain with Ollama for AI, and React/Ink for a terminal UI.
@@ -25,9 +27,11 @@ npx tsx src/index.tsx    # Launch terminal UI
 
 Run TypeScript files directly with tsx (no build step). No test or lint commands are currently configured.
 
+See `tutorial.md` for detailed implementation steps and learning guidance.
+
 ## Architecture
 
-**Three-layer design:**
+**Four-layer design:**
 
 1. **Data Layer (Vault)** - `vault/` contains markdown files with OSE TTRPG rules, organized by category (Characters, Classes, Running Adventures)
 
