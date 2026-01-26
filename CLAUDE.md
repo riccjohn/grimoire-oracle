@@ -45,3 +45,9 @@ Run TypeScript files directly with tsx (no build step). No test or lint commands
 - `langchain`, `@langchain/ollama`, `@langchain/community` - AI orchestration
 - `hnswlib-node` - Vector store for embeddings
 - `ink`, `react` - Terminal UI framework
+
+## TypeScript Rules
+
+- Never use `any` types
+- Never use `!` non-null assertions
+- Prefer `const` over `let` - only use `let` when absolutely necessary
