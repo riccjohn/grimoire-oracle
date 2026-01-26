@@ -15,6 +15,7 @@ import { BM25Retriever } from '@langchain/community/retrievers/bm25';
 import { readFile } from 'node:fs/promises';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Document } from '@langchain/core/documents';
+import type { BaseRetriever } from '@langchain/core/retrievers';
 
 const RETRIEVAL_K = 3;
 const VECTOR_RETRIEVER_WEIGHT = 0.5;
@@ -29,60 +30,56 @@ type OracleOptions = {
   debug?: boolean;
 };
 
+type CoreComponents = {
+  model: ChatOllama;
+  vectorStore: HNSWLib;
+};
+
 /**
- * Sets up the conversational RAG (Retrieval Augmented Generation) chain.
- *
- * @param options.debug - Enable debug logging to see retrieved documents
- *
- * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
- * and returns { input, chat_history, context: Document[], answer: string }
+ * Creates core AI components: LLM for chat, embeddings for vector search,
+ * and loads the vector store for semantic retrieval.
  */
-export const setupOracle = async (options: OracleOptions = {}) => {
-  const { debug = false } = options;
-
-  const debugLog = (...args: unknown[]) => {
-    if (debug) console.log('[DEBUG]', ...args);
-  };
-
-  // --- Setup Core Components ---
-  // LLM for chat, embeddings for vector search, vector store for semantic retrieval
+const createCoreComponents = async (): Promise<CoreComponents> => {
   const model = new ChatOllama({ model: 'llama3', temperature: 0.2 });
   const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
   const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
 
-  // --- Setup Hybrid Search (Vector + Keyword) ---
-  // Load chunks and create BM25 keyword retriever for exact term matching
+  return { model, vectorStore };
+};
+
+/**
+ * Loads and deserializes document chunks from JSON file for BM25 keyword search.
+ * These are the same chunks used during vector store creation.
+ */
+const loadChunksForBM25 = async (): Promise<Document[]> => {
   const chunksData: SerializedChunk[] = JSON.parse(
     await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
   );
 
-  const chunks = chunksData.map(
-    (chunk) =>
-      new Document({
-        pageContent: chunk.pageContent,
-        metadata: chunk.metadata,
-      }),
-  );
+  return chunksData.map((chunk) => {
+    const { pageContent, metadata } = chunk;
 
-  const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: RETRIEVAL_K });
-  const vectorRetriever = vectorStore.asRetriever(RETRIEVAL_K);
-
-  // Combine vector (semantic) and BM25 (keyword) retrievers using weighted RRF
-  // This boosts exact term matches (like "Thief class") while preserving semantic understanding
-  const ensembleRetriever = new EnsembleRetriever({
-    retrievers: [vectorRetriever, bm25Retriever],
-    weights: [VECTOR_RETRIEVER_WEIGHT, BM25_RETRIEVER_WEIGHT],
+    return new Document({
+      pageContent,
+      metadata,
+    });
   });
+};
 
-  // --- History-Aware Retriever ---
-  // Problem: If user asks "What about for elves?" after asking about dwarves,
-  // a naive retriever would search for "What about for elves?" which lacks context.
-  //
-  // Solution: This retriever uses the LLM to rephrase follow-up questions into
-  // standalone queries. "What about for elves?" becomes "elf race abilities" or similar.
-  const historyAwareRetriever = await createHistoryAwareRetriever({
+/**
+ * Creates a history-aware retriever that rephrases follow-up questions using
+ * chat history before searching.
+ *
+ * Example: "What about for elves?" (after asking about dwarves) becomes
+ * "elf race abilities" or similar.
+ */
+const wrapRetrieverWithHistoryAwareness = async (
+  model: ChatOllama,
+  retriever: BaseRetriever,
+) => {
+  return await createHistoryAwareRetriever({
     llm: model,
-    retriever: ensembleRetriever,
+    retriever,
     rephrasePrompt: ChatPromptTemplate.fromMessages([
       new MessagesPlaceholder('chat_history'),
       ['human', '{input}'],
@@ -92,11 +89,14 @@ export const setupOracle = async (options: OracleOptions = {}) => {
       ],
     ]),
   });
+};
 
-  // --- Answer Generation Prompt ---
-  // This prompt template is used by the answer chain to generate responses.
-  // The {context} placeholder will be filled with retrieved documents.
-  const prompt = ChatPromptTemplate.fromMessages([
+/**
+ * Creates the prompt template for answer generation.
+ * The {context} placeholder will be filled with retrieved documents.
+ */
+const createAnswerPrompt = (): ChatPromptTemplate => {
+  return ChatPromptTemplate.fromMessages([
     [
       'system',
       `You are the Grimoire Oracle, a TTRPG rules assistant. Answer questions using ONLY the context provided below.
@@ -109,29 +109,40 @@ Context:
     new MessagesPlaceholder('chat_history'),
     ['human', '{input}'],
   ]);
+};
 
-  // --- Answer Chain ---
-  // "Stuff documents chain" = takes an array of Documents, concatenates ("stuffs")
-  // their content into the {context} placeholder, then sends to the LLM.
-  // (Alternative strategies exist for many documents: map-reduce, refine, etc.)
-  const answerChain = await createStuffDocumentsChain({
+/**
+ * Creates the answer chain that synthesizes retrieved documents into responses.
+ * Uses "stuff documents" strategy: concatenates all documents into {context},
+ * then sends to the LLM.
+ */
+const createAnswerChain = async (
+  model: ChatOllama,
+  prompt: ChatPromptTemplate,
+) => {
+  return createStuffDocumentsChain({
     llm: model,
     prompt,
   });
+};
 
-  // --- Compose the Full Pipeline ---
-  // We manually compose the chain because createRetrievalChain doesn't pass
-  // chat_history to the retriever (it predates history-aware patterns).
-  //
-  // RunnableSequence: runs steps in order, piping output to input
-  // RunnablePassthrough.assign: passes input through, adding new keys
-  //
-  // Flow:
-  //   { input, chat_history }
-  //     → assign context (via historyAwareRetriever → ensembleRetriever → hybrid search)
-  //   { input, chat_history, context }
-  //     → assign answer (via answerChain)
-  //   { input, chat_history, context, answer }
+/**
+ * Composes the full RAG pipeline using RunnableSequence.
+ *
+ * Flow:
+ *   { input, chat_history }
+ *     → assign context (via historyAwareRetriever → ensembleRetriever → hybrid search)
+ *   { input, chat_history, context }
+ *     → assign answer (via answerChain)
+ *   { input, chat_history, context, answer }
+ */
+const composeRAGPipeline = (
+  historyAwareRetriever: Awaited<
+    ReturnType<typeof createHistoryAwareRetriever>
+  >,
+  answerChain: Awaited<ReturnType<typeof createStuffDocumentsChain>>,
+  debugLog: (...args: unknown[]) => void,
+) => {
   return RunnableSequence.from([
     // Retrieve relevant documents using hybrid search (vector + keyword)
     // The historyAwareRetriever rephrases queries, then ensembleRetriever combines both search methods
@@ -159,4 +170,46 @@ Context:
       answer: answerChain,
     }),
   ]);
+};
+
+/**
+ * Sets up the conversational RAG (Retrieval Augmented Generation) chain.
+ *
+ * @param options.debug - Enable debug logging to see retrieved documents
+ *
+ * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
+ * and returns { input, chat_history, context: Document[], answer: string }
+ */
+export const setupOracle = async (options: OracleOptions = {}) => {
+  const { debug = false } = options;
+
+  const debugLog = (...args: unknown[]) => {
+    if (debug) console.log('[DEBUG]', ...args);
+  };
+
+  // Setup core AI components
+  const { model, vectorStore } = await createCoreComponents();
+
+  // Setup hybrid search (vector + keyword)
+  const chunks = await loadChunksForBM25();
+  const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: RETRIEVAL_K });
+  const vectorRetriever = vectorStore.asRetriever(RETRIEVAL_K);
+
+  const ensembleRetriever = new EnsembleRetriever({
+    retrievers: [vectorRetriever, bm25Retriever],
+    weights: [VECTOR_RETRIEVER_WEIGHT, BM25_RETRIEVER_WEIGHT],
+  });
+
+  // Wrap ensemble with history awareness
+  const historyAwareRetriever = await wrapRetrieverWithHistoryAwareness(
+    model,
+    ensembleRetriever,
+  );
+
+  // Setup answer generation
+  const prompt = createAnswerPrompt();
+  const answerChain = await createAnswerChain(model, prompt);
+
+  // Compose the full pipeline
+  return composeRAGPipeline(historyAwareRetriever, answerChain, debugLog);
 };

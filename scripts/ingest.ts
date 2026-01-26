@@ -12,7 +12,7 @@ const MIN_CHUNK_SIZE = 100;
 const GRIMOIRE_INDEX_PATH = './grimoire_index';
 const GRIMOIRE_CHUNKS_PATH = './grimoire_index/grimoire_chunks.json';
 
-type Chunk = Document<Record<string, any>>;
+type Chunk = Document<Record<string, unknown>>;
 
 const main = async () => {
   const docs = await loadVaultDocs('./vault');
