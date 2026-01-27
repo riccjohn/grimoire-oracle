@@ -83,8 +83,8 @@ import { DirectoryLoader } from '@langchain/classic/document_loaders/fs/director
 import { TextLoader } from '@langchain/classic/document_loaders/fs/text';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 
-const CHUNK_SIZE = 500;
-const CHUNK_OVERLAP = 50;
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 100;
 
 const main = async () => {
 	console.log('📂 Loading vault...');
@@ -130,18 +130,22 @@ Now we turn text into numbers (embeddings) and store them for fast similarity se
 import { DirectoryLoader } from '@langchain/classic/document_loaders/fs/directory';
 import type { Document } from '@langchain/core/documents';
 import { TextLoader } from '@langchain/classic/document_loaders/fs/text';
-import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { MarkdownTextSplitter } from '@langchain/textsplitters';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
+import { writeFile } from 'node:fs/promises';
 
-const CHUNK_SIZE = 500;
-const CHUNK_OVERLAP = 50;
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 100;
 const GRIMOIRE_INDEX_PATH = './grimoire_index';
+const GRIMOIRE_CHUNKS_PATH = './grimoire_index/grimoire_chunks.json';
 
 const main = async () => {
 	const docs = await loadVaultDocs('./vault');
 	const chunks = await splitDocsIntoChunks(docs);
-	createVectorIndex(chunks, GRIMOIRE_INDEX_PATH);
+
+	await createVectorIndex(chunks, GRIMOIRE_INDEX_PATH);
+	await saveChunksForBM25(chunks, GRIMOIRE_CHUNKS_PATH);
 };
 
 const loadVaultDocs = async (docPath: string) => {
@@ -156,7 +160,7 @@ const loadVaultDocs = async (docPath: string) => {
 
 const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 	console.log('\n✂️ Splitting into chunks...');
-	const splitter = new RecursiveCharacterTextSplitter({
+	const splitter = new MarkdownTextSplitter({
 		chunkSize: CHUNK_SIZE,
 		chunkOverlap: CHUNK_OVERLAP,
 	});
@@ -176,12 +180,27 @@ const createVectorIndex = async (
 	console.log('✅ Index saved to grimoire_index/');
 };
 
+const saveChunksForBM25 = async (
+	chunks: Document<Record<string, any>>[],
+	filePath: string,
+) => {
+	console.log('\n💾 Saving chunks for BM25 retriever...');
+	await writeFile(filePath, JSON.stringify(chunks, null, 2));
+	console.log(`✅ Chunks saved to ${filePath}`);
+};
+
 main();
 ```
 
 **Run:** `npx tsx scripts/ingest.ts`
 
-**Observe:** A new `grimoire_index/` folder appears with your vector database. This only needs to run once (or when your vault changes).
+**Observe:** A new `grimoire_index/` folder appears containing:
+- Vector database files for semantic search
+- `grimoire_chunks.json` for BM25 keyword search (used later in hybrid search)
+
+This only needs to run once (or when your vault changes).
+
+**Note:** We use `MarkdownTextSplitter` instead of `RecursiveCharacterTextSplitter` because it respects markdown structure (headers, code blocks, paragraphs) instead of splitting at arbitrary character boundaries.
 
 ---
 
@@ -304,9 +323,11 @@ User: "Tell me about the Thief class"
 User: "What skills do they have?"
   ↓ (LLM rephrases using chat history)
 Search query: "Thief class skills abilities"
+  ↓ (passed to underlying retriever)
+Hybrid search via EnsembleRetriever
 ```
 
-This is not just bundling messages together—it's an actual LLM call that generates a new query. The `rephrasePrompt` explicitly instructs: "generate a search query to find relevant rules."
+This is not just bundling messages together—it's an actual LLM call that generates a new query. The `rephrasePrompt` explicitly instructs: "generate a search query to find relevant rules." The rephrased query is then passed to whatever retriever you provide—in our case, the `EnsembleRetriever` that combines vector and BM25 search.
 
 ### Two Separate Uses of Chat History
 
@@ -347,6 +368,8 @@ import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
 import { createStuffDocumentsChain } from '@langchain/classic/chains/combine_documents';
 import { createHistoryAwareRetriever } from '@langchain/classic/chains/history_aware_retriever';
+import { EnsembleRetriever } from '@langchain/classic/retrievers/ensemble';
+import { BM25Retriever } from '@langchain/community/retrievers/bm25';
 import {
 	ChatPromptTemplate,
 	MessagesPlaceholder,
@@ -356,6 +379,8 @@ import {
 	RunnableSequence,
 } from '@langchain/core/runnables';
 import type { BaseMessage } from '@langchain/core/messages';
+import { Document } from '@langchain/core/documents';
+import { readFile } from 'node:fs/promises';
 
 const RETRIEVAL_K = 3;
 
@@ -364,11 +389,29 @@ export async function setupOracle() {
 	const embeddings = new OllamaEmbeddings({ model: 'nomic-embed-text' });
 	const vectorStore = await HNSWLib.load('./grimoire_index', embeddings);
 
-	// Step 1: Create history-aware retriever
+	// Step 1: Setup hybrid search (vector + keyword)
+	// Load chunks for BM25 keyword search
+	const chunksData = JSON.parse(
+		await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
+	);
+	const chunks = chunksData.map(
+		(chunk: { pageContent: string; metadata: Record<string, unknown> }) =>
+			new Document({ pageContent: chunk.pageContent, metadata: chunk.metadata }),
+	);
+
+	const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: RETRIEVAL_K });
+	const vectorRetriever = vectorStore.asRetriever(RETRIEVAL_K);
+
+	const ensembleRetriever = new EnsembleRetriever({
+		retrievers: [vectorRetriever, bm25Retriever],
+		weights: [0.5, 0.5],
+	});
+
+	// Step 2: Create history-aware retriever
 	// This rephrases follow-up questions using chat history before searching
 	const historyAwareRetriever = await createHistoryAwareRetriever({
 		llm: model,
-		retriever: vectorStore.asRetriever(RETRIEVAL_K),
+		retriever: ensembleRetriever,
 		rephrasePrompt: ChatPromptTemplate.fromMessages([
 			new MessagesPlaceholder('chat_history'),
 			['human', '{input}'],
@@ -379,7 +422,7 @@ export async function setupOracle() {
 		]),
 	});
 
-	// Step 2: Create the answer chain
+	// Step 3: Create the answer chain
 	// "Stuff documents chain" concatenates retrieved docs into the {context} placeholder
 	const answerChain = await createStuffDocumentsChain({
 		llm: model,
@@ -393,13 +436,13 @@ export async function setupOracle() {
 		]),
 	});
 
-	// Step 3: Compose the full pipeline manually
+	// Step 4: Compose the full pipeline manually
 	// This is what createRetrievalChain does internally, but we need to do it
 	// ourselves to properly pass chat_history to the retriever.
 	//
 	// Data flow:
 	//   { input, chat_history }
-	//     → assign context (via historyAwareRetriever)
+	//     → assign context (via historyAwareRetriever → ensembleRetriever)
 	//   { input, chat_history, context }
 	//     → assign answer (via answerChain)
 	//   { input, chat_history, context, answer }
@@ -498,100 +541,7 @@ LangChain provides utilities for this:
 
 ---
 
-## Step 9: Basic Terminal UI
-
-Now we wrap everything in a terminal interface using **Ink** (React for the terminal).
-
-**Create `src/index.tsx`:**
-
-```tsx
-import React, { useState, useEffect } from 'react';
-import { render, Text, Box } from 'ink';
-import TextInput from 'ink-text-input';
-import { setupOracle } from './oracle-logic';
-import { HumanMessage, AIMessage } from '@langchain/core/messages';
-
-type Message = { role: 'human' | 'ai'; content: string };
-
-const App = () => {
-	const [query, setQuery] = useState('');
-	const [messages, setMessages] = useState<Message[]>([]);
-	const [loading, setLoading] = useState(false);
-	const [oracle, setOracle] = useState<Awaited<
-		ReturnType<typeof setupOracle>
-	> | null>(null);
-
-	useEffect(() => {
-		setupOracle().then(setOracle);
-	}, []);
-
-	const handleSubmit = async () => {
-		if (!oracle || !query.trim()) return;
-
-		const userMessage: Message = { role: 'human', content: query };
-		setMessages((prev) => [...prev, userMessage]);
-		setQuery('');
-		setLoading(true);
-
-		const chatHistory = messages.map((m) =>
-			m.role === 'human'
-				? new HumanMessage(m.content)
-				: new AIMessage(m.content),
-		);
-
-		const response = await oracle.invoke({
-			input: query,
-			chat_history: chatHistory,
-		});
-
-		setMessages((prev) => [...prev, { role: 'ai', content: response.answer }]);
-		setLoading(false);
-	};
-
-	return (
-		<Box
-			flexDirection='column'
-			padding={1}
-			borderStyle='round'
-			borderColor='cyan'
-		>
-			<Text bold color='yellow'>
-				⚔️ THE GRIMOIRE ORACLE
-			</Text>
-
-			<Box flexDirection='column' marginY={1}>
-				{messages.slice(-6).map((m, i) => (
-					<Text key={i} color={m.role === 'human' ? 'white' : 'green'}>
-						{m.role === 'human' ? '❯ ' : '🧙 '}
-						{m.content}
-					</Text>
-				))}
-			</Box>
-
-			{loading && (
-				<Text italic color='gray'>
-					Consulting the grimoire...
-				</Text>
-			)}
-
-			<Box>
-				<Text color='yellow'>Ask: </Text>
-				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
-			</Box>
-		</Box>
-	);
-};
-
-render(<App />);
-```
-
-**Run:** `npx tsx src/index.tsx`
-
-**Observe:** A bordered chat interface appears. Ask questions and see the oracle respond. Press Ctrl+C to exit.
-
----
-
-## Step 10: Debugging Retrieval
+## Step 9: Debugging Retrieval
 
 You ask the oracle "Tell me about the Thief class" and get "I couldn't find that information." Before assuming the LLM is broken, **debug the retrieval layer**.
 
@@ -700,9 +650,9 @@ The problem is often **chunk size**:
 | **250**           | Better precision, but creates fragments that are just headers with no content (`# Cleric`, `## Falling`).    |
 | **350**           | Still inconsistent—works for some queries, not others.                                                       |
 
-### The Solution: Markdown-Aware Splitting
+### The Solution: Markdown-Aware Splitting ✅
 
-Switch from `RecursiveCharacterTextSplitter` to `MarkdownTextSplitter`:
+Switch from `RecursiveCharacterTextSplitter` to `MarkdownTextSplitter` (already done in Step 5):
 
 ```typescript
 import { MarkdownTextSplitter } from '@langchain/textsplitters';
@@ -724,13 +674,13 @@ Even with good chunking, some queries fail:
 
 Why? The embedding model measures **semantic similarity**. User questions in natural language ("Tell me about X") don't always embed close to structured reference text ("1. **Conjuring light:** In a 15' radius...").
 
-This is a **fundamental RAG challenge**, not a bug in your code.
+This is a **fundamental RAG challenge**, not a bug in your code. The solution? **Hybrid search** (Strategy 3 below) combines vector similarity with keyword matching, so exact terms like "Light spell" get matched even when the semantic embedding doesn't align perfectly.
 
 ---
 
 ## Improving Retrieval Quality
 
-When retrieval fails, you have several strategies to try. We'll implement the first two; the rest are documented for future exploration.
+When retrieval fails, you have several strategies to try. We've implemented the first three (marked with ✅); the rest are documented for future exploration.
 
 ### Strategy 1: Chunk Metadata Enrichment ✅
 
@@ -773,16 +723,41 @@ LangChain provides `MultiQueryRetriever` for this pattern.
 
 **Trade-off:** Adds an LLM call (latency + cost) before every retrieval.
 
-### Strategy 3: Hybrid Search (Vector + Keyword)
+### Strategy 3: Hybrid Search (Vector + Keyword) ✅
 
 Combine semantic similarity with BM25 keyword matching:
 
 - **Vector search:** finds conceptually similar content
-- **Keyword search:** boosts exact term matches ("Thief" → documents containing "Thief")
+- **BM25 keyword search:** boosts exact term matches ("Thief" → documents containing "Thief")
 
-Libraries like `hnswlib` are vector-only; you'd need to add a keyword index or switch to a hybrid store like Weaviate, Pinecone, or Elasticsearch.
+LangChain provides `EnsembleRetriever` to combine multiple retrievers with configurable weights:
 
-**Trade-off:** More infrastructure complexity.
+```typescript
+import { EnsembleRetriever } from '@langchain/classic/retrievers/ensemble';
+import { BM25Retriever } from '@langchain/community/retrievers/bm25';
+
+// Load the same chunks used during ingestion
+const chunksData = JSON.parse(
+	await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
+);
+const chunks = chunksData.map(
+	(chunk) => new Document({ pageContent: chunk.pageContent, metadata: chunk.metadata }),
+);
+
+// Create both retrievers
+const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: 3 });
+const vectorRetriever = vectorStore.asRetriever(3);
+
+// Combine with equal weights
+const ensembleRetriever = new EnsembleRetriever({
+	retrievers: [vectorRetriever, bm25Retriever],
+	weights: [0.5, 0.5],
+});
+```
+
+The ensemble returns documents that score well on either method, with results weighted and deduplicated.
+
+**Trade-off:** Requires saving chunks during ingestion (already done in Step 5). BM25 loads all chunks into memory.
 
 ### Strategy 4: Multi-Query Retrieval
 
@@ -816,6 +791,316 @@ Retrieve many candidates (K=20), then use a cross-encoder or LLM to re-rank by a
 Embed small chunks for precise matching, but return the larger parent document (or section) for context.
 
 **Trade-off:** More complex ingestion, larger context per result.
+
+---
+
+## Step 10: Terminal UI
+
+Now that the oracle logic is complete and tested, we can wrap it in an interactive interface. We'll use **Ink**, which lets you build terminal UIs with React. If you know React, you already know Ink—same components, same hooks, same mental model, just rendering to the terminal instead of the browser.
+
+### Why Ink?
+
+Building interactive terminal apps traditionally means managing cursor positions, escape codes, and raw input handling. Ink abstracts all of that:
+
+| Browser React | Ink (Terminal React) |
+|---------------|----------------------|
+| `<div>` | `<Box>` |
+| `<span>` | `<Text>` |
+| CSS flexbox | Same flexbox props on `<Box>` |
+| `onClick` | `onSubmit`, keyboard handlers |
+
+The mental model is identical: declare your UI as a function of state, and Ink handles re-rendering when state changes.
+
+### Step 10a: Hello Terminal
+
+Let's start with the minimum viable Ink app.
+
+**Create `src/index.tsx`:**
+
+```tsx
+import { render, Text } from 'ink';
+
+const App = () => {
+	return <Text>Hello from the terminal!</Text>;
+};
+
+render(<App />);
+```
+
+**Run:** `npx tsx src/index.tsx`
+
+**Observe:** The text appears and the process exits. That's the simplest Ink app—a stateless component that renders once.
+
+### Step 10b: Layout with Box
+
+`<Box>` is Ink's layout primitive, equivalent to a `<div>` with flexbox. Let's create a bordered container.
+
+**Update `src/index.tsx`:**
+
+```tsx
+import { render, Text, Box } from 'ink';
+
+const App = () => {
+	return (
+		<Box
+			flexDirection='column'
+			padding={1}
+			borderStyle='round'
+			borderColor='cyan'
+		>
+			<Text bold color='yellow'>
+				⚔️ THE GRIMOIRE ORACLE
+			</Text>
+			<Text>Ask me about TTRPG rules...</Text>
+		</Box>
+	);
+};
+
+render(<App />);
+```
+
+**Run:** `npx tsx src/index.tsx`
+
+**Observe:** A bordered box appears with styled text. The `flexDirection='column'` stacks children vertically (the default is row). Try changing `borderStyle` to `'single'`, `'double'`, or `'classic'`.
+
+### Step 10c: Adding State with useState
+
+Now let's make it interactive. We need to track:
+- What the user is currently typing (`query`)
+- Whether we're waiting for a response (`loading`)
+
+```tsx
+import { useState } from 'react';
+import { render, Text, Box } from 'ink';
+import TextInput from 'ink-text-input';
+
+const App = () => {
+	const [query, setQuery] = useState('');
+	const [loading, setLoading] = useState(false);
+
+	const handleSubmit = () => {
+		if (!query.trim()) return;
+		setLoading(true);
+		// We'll add the oracle call here later
+		setTimeout(() => setLoading(false), 1000); // Fake delay for now
+		setQuery('');
+	};
+
+	return (
+		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
+			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
+
+			{loading && (
+				<Text italic color='gray'>Consulting the grimoire...</Text>
+			)}
+
+			<Box>
+				<Text color='yellow'>Ask: </Text>
+				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
+			</Box>
+		</Box>
+	);
+};
+
+render(<App />);
+```
+
+**Key concepts:**
+
+- **`TextInput`** is a controlled component from `ink-text-input`. It doesn't manage its own state—you provide `value` and update it via `onChange`.
+- **`onSubmit`** fires when the user presses Enter.
+- **Conditional rendering** (`{loading && ...}`) works exactly like React on the web.
+
+**Run:** `npx tsx src/index.tsx`
+
+**Observe:** Type something and press Enter. The loading message appears briefly. The input clears. But nothing actually happens yet—we need to connect the oracle.
+
+### Step 10d: Connecting the Oracle with useEffect
+
+The oracle needs to be initialized before we can use it. This is a side effect that should happen once when the component mounts—the classic use case for `useEffect`.
+
+```tsx
+import { useState, useEffect } from 'react';
+import { render, Text, Box } from 'ink';
+import TextInput from 'ink-text-input';
+import { setupOracle } from './oracle-logic';
+
+const App = () => {
+	const [query, setQuery] = useState('');
+	const [loading, setLoading] = useState(false);
+	const [oracle, setOracle] = useState<Awaited<
+		ReturnType<typeof setupOracle>
+	> | null>(null);
+
+	// Initialize oracle on mount
+	useEffect(() => {
+		setupOracle().then(setOracle);
+	}, []);
+
+	const handleSubmit = async () => {
+		if (!oracle || !query.trim()) return;
+
+		setLoading(true);
+		const response = await oracle.invoke({
+			input: query,
+			chat_history: [], // Empty for now
+		});
+		console.log(response.answer);
+		setLoading(false);
+		setQuery('');
+	};
+
+	return (
+		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
+			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
+
+			{!oracle && <Text color='gray'>Loading oracle...</Text>}
+
+			{loading && <Text italic color='gray'>Consulting the grimoire...</Text>}
+
+			<Box>
+				<Text color='yellow'>Ask: </Text>
+				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
+			</Box>
+		</Box>
+	);
+};
+
+render(<App />);
+```
+
+**Key concepts:**
+
+- **`useEffect(() => {...}, [])`** — The empty dependency array means "run once on mount." Without it, the effect would run on every render.
+- **TypeScript inference** — `Awaited<ReturnType<typeof setupOracle>>` extracts the return type of the async `setupOracle` function. This is verbose but avoids manually defining the oracle's type.
+- **Null check** — `if (!oracle || ...)` prevents calling methods on a null oracle before initialization completes.
+
+**Run:** `npx tsx src/index.tsx`
+
+**Observe:** The oracle initializes, you can ask questions, and answers appear in the console (not the UI yet). We're almost there.
+
+### Step 10e: Chat History Display
+
+A chat interface needs to display the conversation. We'll store messages in state and render them.
+
+```tsx
+import { useState, useEffect } from 'react';
+import { render, Text, Box } from 'ink';
+import TextInput from 'ink-text-input';
+import { setupOracle } from './oracle-logic';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
+
+type Message = { role: 'human' | 'ai'; content: string };
+
+const App = () => {
+	const [query, setQuery] = useState('');
+	const [messages, setMessages] = useState<Message[]>([]);
+	const [loading, setLoading] = useState(false);
+	const [oracle, setOracle] = useState<Awaited<
+		ReturnType<typeof setupOracle>
+	> | null>(null);
+
+	useEffect(() => {
+		setupOracle().then(setOracle);
+	}, []);
+
+	const handleSubmit = async () => {
+		if (!oracle || !query.trim()) return;
+
+		// Add user message immediately (optimistic update)
+		const userMessage: Message = { role: 'human', content: query };
+		setMessages((prev) => [...prev, userMessage]);
+		setQuery('');
+		setLoading(true);
+
+		// Convert our messages to LangChain format for chat_history
+		const chatHistory = messages.map((m) =>
+			m.role === 'human'
+				? new HumanMessage(m.content)
+				: new AIMessage(m.content),
+		);
+
+		const response = await oracle.invoke({
+			input: query,
+			chat_history: chatHistory,
+		});
+
+		// Add AI response
+		setMessages((prev) => [...prev, { role: 'ai', content: response.answer }]);
+		setLoading(false);
+	};
+
+	return (
+		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
+			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
+
+			<Box flexDirection='column' marginY={1}>
+				{messages.slice(-6).map((m, i) => (
+					<Text key={i} color={m.role === 'human' ? 'white' : 'green'}>
+						{m.role === 'human' ? '❯ ' : '🧙 '}
+						{m.content}
+					</Text>
+				))}
+			</Box>
+
+			{loading && <Text italic color='gray'>Consulting the grimoire...</Text>}
+
+			<Box>
+				<Text color='yellow'>Ask: </Text>
+				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
+			</Box>
+		</Box>
+	);
+};
+
+render(<App />);
+```
+
+**Key concepts:**
+
+- **Two message formats** — We store messages as simple `{role, content}` objects for our UI, but LangChain needs `HumanMessage`/`AIMessage` instances. We convert between them when calling the oracle.
+
+- **Optimistic updates** — We add the user's message to state immediately (`setMessages((prev) => [...prev, userMessage])`), before waiting for the AI response. This makes the UI feel responsive.
+
+- **Functional state updates** — `setMessages((prev) => [...prev, newMessage])` is safer than `setMessages([...messages, newMessage])` because it uses the latest state value, avoiding race conditions.
+
+- **Windowing** — `messages.slice(-6)` shows only the last 6 messages. Terminals have limited vertical space; without this, long conversations would overflow.
+
+**Run:** `npx tsx src/index.tsx`
+
+**Observe:** A fully functional chat interface. Ask questions, see your history, get answers. Press Ctrl+C to exit.
+
+### Understanding the Data Flow
+
+Here's how data moves through the app:
+
+```
+User types → query state updates → UI re-renders with current input
+     ↓
+User presses Enter → handleSubmit fires
+     ↓
+1. Add user message to messages[] (optimistic)
+2. Clear query, set loading=true
+3. Convert messages[] to LangChain format
+4. Call oracle.invoke({ input, chat_history })
+     ↓
+5. Add AI response to messages[]
+6. Set loading=false
+     ↓
+UI re-renders showing new messages
+```
+
+The key insight: **React state is the single source of truth.** The UI is always a pure function of `(query, messages, loading, oracle)`. When any of these change, Ink re-renders automatically.
+
+### Exercises
+
+1. **Add a startup message** — Show "Oracle ready!" after initialization completes.
+
+2. **Handle errors** — Wrap the `oracle.invoke()` call in try/catch and display errors in the UI.
+
+3. **Add timestamps** — Extend the `Message` type to include a timestamp, display it next to each message.
+
+4. **Exit gracefully** — Use the `useInput` hook from Ink to detect when the user types "quit" or presses Escape.
 
 ---
 
@@ -898,17 +1183,19 @@ You've built a RAG application from scratch:
 3. **Splitter** → Break into searchable chunks (markdown-aware)
 4. **Embeddings** → Convert text to vectors
 5. **Vector Store** → Index for similarity search
-6. **Retriever** → Find relevant chunks for a query
+6. **Hybrid Retriever** → Combine vector similarity with BM25 keyword matching
 7. **LLM Chain** → Generate answers from context
 8. **History-Aware Retriever** → Handle follow-up questions
 9. **Runnable Composition** → Manually compose chains when pre-built functions don't fit
 10. **UI** → Interactive terminal interface
 11. **Debug Retrieval** → Inspect what the retriever actually returns
-12. **Improve Retrieval** → Chunk metadata enrichment, query rewriting, and more
+12. **Improve Retrieval** → Chunk metadata enrichment, hybrid search, and more
 
 Key insights:
 
 - **RAG quality depends on retrieval quality.** The LLM can only work with what the retriever gives it. When answers are wrong, debug the retrieval first—not the LLM.
+
+- **Hybrid search beats pure vector search for domain-specific content.** Vector search finds conceptually similar content but can miss exact terminology. BM25 keyword search catches exact terms but misses paraphrased questions. Combining them via `EnsembleRetriever` covers both cases.
 
 - **LangChain's convenience functions don't always compose well.** When `createRetrievalChain` didn't pass `chat_history` to our retriever, we used lower-level Runnables (`RunnableSequence`, `RunnablePassthrough`) to build exactly what we needed.
 
