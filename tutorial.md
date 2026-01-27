@@ -867,7 +867,7 @@ render(<App />);
 
 Now let's make it interactive. We need to track:
 - What the user is currently typing (`query`)
-- Whether we're waiting for a response (`loading`)
+- The current UI state (`status`: idle, loading, or error)
 
 ```tsx
 import { useState } from 'react';
@@ -876,28 +876,32 @@ import TextInput from 'ink-text-input';
 
 const App = () => {
 	const [query, setQuery] = useState('');
-	const [loading, setLoading] = useState(false);
+	const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 
 	const handleSubmit = () => {
 		if (!query.trim()) return;
-		setLoading(true);
+		setStatus('loading');
 		// We'll add the oracle call here later
-		setTimeout(() => setLoading(false), 1000); // Fake delay for now
+		setTimeout(() => setStatus('idle'), 1000); // Fake delay for now
 		setQuery('');
 	};
 
 	return (
 		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
-			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
+			<Text bold color='yellow'>THE GRIMOIRE ORACLE</Text>
 
-			{loading && (
+			{status === 'loading' && (
 				<Text italic color='gray'>Consulting the grimoire...</Text>
 			)}
 
-			<Box>
-				<Text color='yellow'>Ask: </Text>
-				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
-			</Box>
+			{status === 'idle' && (
+				<TextInput
+					value={query}
+					onChange={setQuery}
+					onSubmit={handleSubmit}
+					placeholder="Ask me about OSE rules..."
+				/>
+			)}
 		</Box>
 	);
 };
@@ -909,7 +913,8 @@ render(<App />);
 
 - **`TextInput`** is a controlled component from `ink-text-input`. It doesn't manage its own state—you provide `value` and update it via `onChange`.
 - **`onSubmit`** fires when the user presses Enter.
-- **Conditional rendering** (`{loading && ...}`) works exactly like React on the web.
+- **Status enum** — Using `'idle' | 'loading' | 'error'` instead of a boolean makes it easier to handle multiple states and extend later.
+- **Conditional rendering** (`{status === 'loading' && ...}`) works exactly like React on the web.
 
 **Run:** `npx tsx src/index.tsx`
 
@@ -927,7 +932,7 @@ import { setupOracle } from './oracle-logic';
 
 const App = () => {
 	const [query, setQuery] = useState('');
-	const [loading, setLoading] = useState(false);
+	const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 	const [oracle, setOracle] = useState<Awaited<
 		ReturnType<typeof setupOracle>
 	> | null>(null);
@@ -940,28 +945,34 @@ const App = () => {
 	const handleSubmit = async () => {
 		if (!oracle || !query.trim()) return;
 
-		setLoading(true);
+		setStatus('loading');
 		const response = await oracle.invoke({
 			input: query,
 			chat_history: [], // Empty for now
 		});
 		console.log(response.answer);
-		setLoading(false);
+		setStatus('idle');
 		setQuery('');
 	};
 
 	return (
 		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
-			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
+			<Text bold color='yellow'>THE GRIMOIRE ORACLE</Text>
 
 			{!oracle && <Text color='gray'>Loading oracle...</Text>}
 
-			{loading && <Text italic color='gray'>Consulting the grimoire...</Text>}
+			{status === 'loading' && (
+				<Text italic color='gray'>Consulting the grimoire...</Text>
+			)}
 
-			<Box>
-				<Text color='yellow'>Ask: </Text>
-				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
-			</Box>
+			{status === 'idle' && (
+				<TextInput
+					value={query}
+					onChange={setQuery}
+					onSubmit={handleSubmit}
+					placeholder="Ask me about OSE rules..."
+				/>
+			)}
 		</Box>
 	);
 };
@@ -981,37 +992,72 @@ render(<App />);
 
 ### Step 10e: Chat History Display
 
-A chat interface needs to display the conversation. We'll store messages in state and render them.
+A chat interface needs to display the conversation. We'll store messages in state and render them. We'll also use our Catppuccin theme for consistent styling.
+
+First, create a theme file (`src/theme.ts`) using the `@catppuccin/palette` package:
+
+```typescript
+import { flavors } from '@catppuccin/palette';
+
+const mocha = flavors.mocha.colors;
+
+export const theme = {
+	// Oracle (AI responses)
+	oracleTitle: mocha.lavender.hex,
+	oracleResponse: mocha.sapphire.hex,
+
+	// User (input & messages)
+	userTitle: mocha.green.hex,
+	userResponse: mocha.teal.hex,
+
+	// UI states
+	dim: mocha.overlay0.hex,
+	error: mocha.red.hex,
+	success: mocha.green.hex,
+	loading: mocha.yellow.hex,
+	accent: mocha.peach.hex,
+
+	// Direct palette access (if needed)
+	palette: mocha,
+};
+```
+
+Now the full app (`src/App.tsx`):
 
 ```tsx
-import { useState, useEffect } from 'react';
-import { render, Text, Box } from 'ink';
+import { Box, render, Text } from 'ink';
 import TextInput from 'ink-text-input';
+import { useEffect, useState } from 'react';
 import { setupOracle } from './oracle-logic';
-import { HumanMessage, AIMessage } from '@langchain/core/messages';
+import { theme } from './theme';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
 type Message = { role: 'human' | 'ai'; content: string };
 
 const App = () => {
-	const [query, setQuery] = useState('');
-	const [messages, setMessages] = useState<Message[]>([]);
-	const [loading, setLoading] = useState(false);
 	const [oracle, setOracle] = useState<Awaited<
 		ReturnType<typeof setupOracle>
 	> | null>(null);
+
+	const [query, setQuery] = useState('');
+	const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+	const [messages, setMessages] = useState<Message[]>([]);
 
 	useEffect(() => {
 		setupOracle().then(setOracle);
 	}, []);
 
 	const handleSubmit = async () => {
-		if (!oracle || !query.trim()) return;
+		if (!oracle || !query.trim()) {
+			setStatus('error');
+			return;
+		}
 
 		// Add user message immediately (optimistic update)
 		const userMessage: Message = { role: 'human', content: query };
 		setMessages((prev) => [...prev, userMessage]);
 		setQuery('');
-		setLoading(true);
+		setStatus('loading');
 
 		// Convert our messages to LangChain format for chat_history
 		const chatHistory = messages.map((m) =>
@@ -1019,36 +1065,53 @@ const App = () => {
 				? new HumanMessage(m.content)
 				: new AIMessage(m.content),
 		);
-
 		const response = await oracle.invoke({
 			input: query,
 			chat_history: chatHistory,
 		});
 
 		// Add AI response
-		setMessages((prev) => [...prev, { role: 'ai', content: response.answer }]);
-		setLoading(false);
+		const aiMessage: Message = { role: 'ai', content: response.answer };
+		setMessages((prev) => [...prev, aiMessage]);
+		setStatus('idle');
 	};
 
 	return (
-		<Box flexDirection='column' padding={1} borderStyle='round' borderColor='cyan'>
-			<Text bold color='yellow'>⚔️ THE GRIMOIRE ORACLE</Text>
-
-			<Box flexDirection='column' marginY={1}>
+		<Box
+			flexDirection="column"
+			padding={1}
+			borderStyle="round"
+			borderColor={theme.oracleTitle}
+		>
+			<Text bold color={theme.oracleTitle}>
+				THE GRIMOIRE ORACLE
+			</Text>
+			<Box flexDirection="column" marginY={1}>
 				{messages.slice(-6).map((m, i) => (
-					<Text key={i} color={m.role === 'human' ? 'white' : 'green'}>
-						{m.role === 'human' ? '❯ ' : '🧙 '}
+					<Text
+						key={i}
+						color={
+							m.role === 'human' ? theme.userResponse : theme.oracleResponse
+						}
+					>
+						{m.role === 'human' ? '> ' : '~ '}
 						{m.content}
 					</Text>
 				))}
 			</Box>
-
-			{loading && <Text italic color='gray'>Consulting the grimoire...</Text>}
-
-			<Box>
-				<Text color='yellow'>Ask: </Text>
-				<TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} />
-			</Box>
+			{status === 'loading' && (
+				<Text italic color={theme.loading}>
+					Consulting the grimoire...
+				</Text>
+			)}
+			{status === 'idle' && (
+				<TextInput
+					value={query}
+					onChange={setQuery}
+					onSubmit={handleSubmit}
+					placeholder="Ask me about OSE rules..."
+				/>
+			)}
 		</Box>
 	);
 };
@@ -1058,6 +1121,10 @@ render(<App />);
 
 **Key concepts:**
 
+- **Status enum vs boolean** — Using `status: 'idle' | 'loading' | 'error'` instead of a boolean `loading` makes it easier to handle multiple states and add new ones later (like `'error'`).
+
+- **Theme tokens** — Instead of hardcoded colors like `'cyan'` or `'yellow'`, we use semantic tokens from our theme (`theme.oracleTitle`, `theme.userResponse`). This keeps colors consistent and makes it easy to change the palette.
+
 - **Two message formats** — We store messages as simple `{role, content}` objects for our UI, but LangChain needs `HumanMessage`/`AIMessage` instances. We convert between them when calling the oracle.
 
 - **Optimistic updates** — We add the user's message to state immediately (`setMessages((prev) => [...prev, userMessage])`), before waiting for the AI response. This makes the UI feel responsive.
@@ -1066,9 +1133,11 @@ render(<App />);
 
 - **Windowing** — `messages.slice(-6)` shows only the last 6 messages. Terminals have limited vertical space; without this, long conversations would overflow.
 
-**Run:** `npx tsx src/index.tsx`
+- **Conditional input visibility** — The `TextInput` only appears when `status === 'idle'`, preventing the user from typing while the oracle is thinking.
 
-**Observe:** A fully functional chat interface. Ask questions, see your history, get answers. Press Ctrl+C to exit.
+**Run:** `npm run dev`
+
+**Observe:** A fully functional chat interface with themed colors. Ask questions, see your history, get answers. Press Ctrl+C to exit.
 
 ### Understanding the Data Flow
 
@@ -1080,23 +1149,23 @@ User types → query state updates → UI re-renders with current input
 User presses Enter → handleSubmit fires
      ↓
 1. Add user message to messages[] (optimistic)
-2. Clear query, set loading=true
+2. Clear query, set status='loading'
 3. Convert messages[] to LangChain format
 4. Call oracle.invoke({ input, chat_history })
      ↓
 5. Add AI response to messages[]
-6. Set loading=false
+6. Set status='idle'
      ↓
 UI re-renders showing new messages
 ```
 
-The key insight: **React state is the single source of truth.** The UI is always a pure function of `(query, messages, loading, oracle)`. When any of these change, Ink re-renders automatically.
+The key insight: **React state is the single source of truth.** The UI is always a pure function of `(query, messages, status, oracle)`. When any of these change, Ink re-renders automatically.
 
 ### Exercises
 
-1. **Add a startup message** — Show "Oracle ready!" after initialization completes.
+1. **Add error handling** — Wrap the `oracle.invoke()` call in try/catch and set `status='error'` on failure. Display an error message when `status === 'error'`.
 
-2. **Handle errors** — Wrap the `oracle.invoke()` call in try/catch and display errors in the UI.
+2. **Add a startup message** — Show "Oracle ready!" after initialization completes.
 
 3. **Add timestamps** — Extend the `Message` type to include a timestamp, display it next to each message.
 
