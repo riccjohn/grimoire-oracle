@@ -1,6 +1,5 @@
-import { Box, render, Text } from 'ink';
-import TextInput from 'ink-text-input';
-import { useEffect, useState } from 'react';
+import { Box, render, Text, useInput } from 'ink';
+import { useEffect, useRef, useState } from 'react';
 import { setupOracle } from './oracle-logic';
 import { theme } from './theme';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
@@ -15,6 +14,7 @@ const App = () => {
   > | null>(null);
 
   const [query, setQuery] = useState('');
+  const queryRef = useRef('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [messages, setMessages] = useState<Message[]>([]);
 
@@ -22,16 +22,15 @@ const App = () => {
     setupOracle().then(setOracle);
   }, []);
 
-  const handleSubmit = async () => {
-    if (!oracle || !query.trim()) {
+  const handleSubmit = async (submittedQuery: string) => {
+    if (!oracle || !submittedQuery.trim()) {
       setStatus('error');
       return;
     }
 
     // Add user message immediately (optimistic update)
-    const userMessage: Message = { role: 'human', content: query };
+    const userMessage: Message = { role: 'human', content: submittedQuery };
     setMessages((prev) => [...prev, userMessage]);
-    setQuery('');
     setStatus('loading');
 
     // Convert our messages to LangChain format for chat_history
@@ -41,7 +40,7 @@ const App = () => {
         : new AIMessage(m.content),
     );
     const response = await oracle.invoke({
-      input: query,
+      input: submittedQuery,
       chat_history: chatHistory,
     });
 
@@ -50,6 +49,26 @@ const App = () => {
     setMessages((prev) => [...prev, aiMessage]);
     setStatus('idle');
   };
+
+  const isInputActive = status === 'idle' && oracle !== null;
+
+  useInput(
+    (input, key) => {
+      if (key.return) {
+        const submittedQuery = queryRef.current;
+        queryRef.current = '';
+        setQuery('');
+        handleSubmit(submittedQuery);
+      } else if (key.backspace || key.delete) {
+        queryRef.current = queryRef.current.slice(0, -1);
+        setQuery(queryRef.current);
+      } else if (!key.ctrl && !key.meta && input) {
+        queryRef.current += input;
+        setQuery(queryRef.current);
+      }
+    },
+    { isActive: isInputActive },
+  );
 
   return (
     <Box
@@ -81,14 +100,10 @@ const App = () => {
       )}
       {!oracle && <Text color={theme.loading}>Loading oracle...</Text>}
       {status === 'idle' && oracle && (
-        <>
-          <TextInput
-            value={query}
-            onChange={setQuery}
-            onSubmit={handleSubmit}
-            placeholder="Ask me about OSE rules..."
-          />
-        </>
+        <Text>
+          {query.length > 0 ? query : <Text dimColor>Ask me about OSE rules...</Text>}
+          <Text backgroundColor="white"> </Text>
+        </Text>
       )}
     </Box>
   );
