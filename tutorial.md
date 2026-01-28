@@ -137,15 +137,20 @@ import { writeFile } from 'node:fs/promises';
 
 const CHUNK_SIZE = 1000;
 const CHUNK_OVERLAP = 100;
+const MIN_CHUNK_SIZE = 100;
 const GRIMOIRE_INDEX_PATH = './grimoire_index';
 const GRIMOIRE_CHUNKS_PATH = './grimoire_index/grimoire_chunks.json';
+
+type Chunk = Document<Record<string, unknown>>;
 
 const main = async () => {
 	const docs = await loadVaultDocs('./vault');
 	const chunks = await splitDocsIntoChunks(docs);
+	const mergedChunks = mergeSmallChunks(chunks);
+	const enrichedChunks = enrichChunksWithMetadata(mergedChunks);
 
-	await createVectorIndex(chunks, GRIMOIRE_INDEX_PATH);
-	await saveChunksForBM25(chunks, GRIMOIRE_CHUNKS_PATH);
+	await createVectorIndex(enrichedChunks, GRIMOIRE_INDEX_PATH);
+	await saveChunksForBM25(enrichedChunks, GRIMOIRE_CHUNKS_PATH);
 };
 
 const loadVaultDocs = async (docPath: string) => {
@@ -158,7 +163,7 @@ const loadVaultDocs = async (docPath: string) => {
 	return docs;
 };
 
-const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
+const splitDocsIntoChunks = async (docs: Chunk[]) => {
 	console.log('\n✂️ Splitting into chunks...');
 	const splitter = new MarkdownTextSplitter({
 		chunkSize: CHUNK_SIZE,
@@ -169,10 +174,84 @@ const splitDocsIntoChunks = async (docs: Document<Record<string, any>>[]) => {
 	return chunks;
 };
 
-const createVectorIndex = async (
-	chunks: Document<Record<string, any>>[],
-	pathToStore: string,
-) => {
+/**
+ * Merges small chunks with the following chunk from the same document.
+ * Prevents orphaned headers from becoming standalone chunks.
+ */
+const mergeSmallChunks = (chunks: Chunk[]) => {
+	console.log('\n🔗 Merging small chunks...');
+	const result = chunks.reduce<{ merged: Chunk[]; skipNext: boolean }>(
+		(acc, current, index) => {
+			if (acc.skipNext) {
+				return { merged: acc.merged, skipNext: false };
+			}
+
+			const next = chunks[index + 1];
+			const shouldMerge =
+				current.pageContent.length < MIN_CHUNK_SIZE &&
+				next &&
+				current.metadata.source === next.metadata.source;
+
+			if (shouldMerge) {
+				return {
+					merged: [
+						...acc.merged,
+						{
+							pageContent: current.pageContent + '\n\n' + next.pageContent,
+							metadata: current.metadata,
+						},
+					],
+					skipNext: true,
+				};
+			}
+
+			return { merged: [...acc.merged, current], skipNext: false };
+		},
+		{ merged: [], skipNext: false },
+	);
+
+	console.log(`✅ Merged ${chunks.length} → ${result.merged.length} chunks`);
+	return result.merged;
+};
+
+/**
+ * Prepends document title to each chunk's content to improve retrieval.
+ */
+const enrichChunksWithMetadata = (chunks: Chunk[]) => {
+	return chunks.map((chunk) => {
+		const filepath = chunk.metadata.source as string;
+		const title = extractTitleFromPath(filepath);
+		chunk.pageContent = `[${title}]\n${chunk.pageContent}`;
+		return chunk;
+	});
+};
+
+/**
+ * Extracts a searchable title from a file path.
+ * For class files, returns "X Class" format for better query matching.
+ */
+const extractTitleFromPath = (filepath: string) => {
+	const vaultIndex = filepath.indexOf('vault/');
+	const relativePath =
+		vaultIndex !== -1 ? filepath.slice(vaultIndex + 'vault/'.length) : filepath;
+
+	const segments = relativePath
+		.replace(/\.md$/, '')
+		.split('/')
+		.map((segment) => segment.replace(/^\d+[a-z]?[\.\-]\s*/, ''));
+
+	// For class files, return "X Class" for better matching
+	if (segments.includes('Classes') && segments.length >= 2) {
+		const className = segments[segments.length - 1];
+		if (className !== 'Character Classes') {
+			return `${className} Class`;
+		}
+	}
+
+	return segments.filter((s) => s !== 'rules').join(' > ');
+};
+
+const createVectorIndex = async (chunks: Chunk[], pathToStore: string) => {
 	console.log('🧠 Creating embeddings (this may take a moment)...');
 	const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
 	const vectorStore = await HNSWLib.fromDocuments(chunks, embedder);
@@ -180,10 +259,7 @@ const createVectorIndex = async (
 	console.log('✅ Index saved to grimoire_index/');
 };
 
-const saveChunksForBM25 = async (
-	chunks: Document<Record<string, any>>[],
-	filePath: string,
-) => {
+const saveChunksForBM25 = async (chunks: Chunk[], filePath: string) => {
 	console.log('\n💾 Saving chunks for BM25 retriever...');
 	await writeFile(filePath, JSON.stringify(chunks, null, 2));
 	console.log(`✅ Chunks saved to ${filePath}`);
@@ -192,7 +268,7 @@ const saveChunksForBM25 = async (
 main();
 ```
 
-**Run:** `npx tsx scripts/ingest.ts`
+**Run:** `npm run ingest`
 
 **Observe:** A new `grimoire_index/` folder appears containing:
 - Vector database files for semantic search
@@ -200,7 +276,13 @@ main();
 
 This only needs to run once (or when your vault changes).
 
-**Note:** We use `MarkdownTextSplitter` instead of `RecursiveCharacterTextSplitter` because it respects markdown structure (headers, code blocks, paragraphs) instead of splitting at arbitrary character boundaries.
+**Key processing steps:**
+
+1. **MarkdownTextSplitter** — Respects markdown structure (headers, code blocks) instead of splitting at arbitrary character boundaries.
+
+2. **mergeSmallChunks** — Prevents orphaned headers from becoming standalone chunks. If a chunk is under 100 characters, it gets merged with the next chunk from the same file.
+
+3. **enrichChunksWithMetadata** — Prepends a title like `[Thief Class]` to each chunk so queries like "Tell me about the Thief" match even if the chunk only contains "Back-stab: When attacking..."
 
 ---
 
@@ -363,13 +445,10 @@ LangChain provides lower-level primitives for composing chains manually:
 
 **Update `src/oracle-logic.ts`:**
 
+The oracle logic is organized into focused helper functions for clarity:
+
 ```typescript
-import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
-import { createStuffDocumentsChain } from '@langchain/classic/chains/combine_documents';
-import { createHistoryAwareRetriever } from '@langchain/classic/chains/history_aware_retriever';
-import { EnsembleRetriever } from '@langchain/classic/retrievers/ensemble';
-import { BM25Retriever } from '@langchain/community/retrievers/bm25';
 import {
 	ChatPromptTemplate,
 	MessagesPlaceholder,
@@ -378,89 +457,164 @@ import {
 	RunnablePassthrough,
 	RunnableSequence,
 } from '@langchain/core/runnables';
+import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
+import { createStuffDocumentsChain } from '@langchain/classic/chains/combine_documents';
+import { createHistoryAwareRetriever } from '@langchain/classic/chains/history_aware_retriever';
+import { EnsembleRetriever } from '@langchain/classic/retrievers/ensemble';
+import { BM25Retriever } from '@langchain/community/retrievers/bm25';
+import { readFile } from 'node:fs/promises';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Document } from '@langchain/core/documents';
-import { readFile } from 'node:fs/promises';
+import type { BaseRetriever } from '@langchain/core/retrievers';
 
 const RETRIEVAL_K = 3;
+const VECTOR_RETRIEVER_WEIGHT = 0.5;
+const BM25_RETRIEVER_WEIGHT = 0.5;
 
-export async function setupOracle() {
+type SerializedChunk = {
+	pageContent: string;
+	metadata: Record<string, unknown>;
+};
+
+type OracleOptions = {
+	debug?: boolean;
+};
+
+/**
+ * Creates core AI components: LLM and vector store.
+ */
+const createCoreComponents = async () => {
 	const model = new ChatOllama({ model: 'llama3', temperature: 0.2 });
-	const embeddings = new OllamaEmbeddings({ model: 'nomic-embed-text' });
-	const vectorStore = await HNSWLib.load('./grimoire_index', embeddings);
+	const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
+	const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
+	return { model, vectorStore };
+};
 
-	// Step 1: Setup hybrid search (vector + keyword)
-	// Load chunks for BM25 keyword search
-	const chunksData = JSON.parse(
+/**
+ * Loads document chunks from JSON for BM25 keyword search.
+ */
+const loadChunksForBM25 = async (): Promise<Document[]> => {
+	const chunksData: SerializedChunk[] = JSON.parse(
 		await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
 	);
-	const chunks = chunksData.map(
-		(chunk: { pageContent: string; metadata: Record<string, unknown> }) =>
-			new Document({ pageContent: chunk.pageContent, metadata: chunk.metadata }),
+	return chunksData.map(
+		(chunk) => new Document({ pageContent: chunk.pageContent, metadata: chunk.metadata }),
 	);
+};
 
-	const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: RETRIEVAL_K });
-	const vectorRetriever = vectorStore.asRetriever(RETRIEVAL_K);
-
-	const ensembleRetriever = new EnsembleRetriever({
-		retrievers: [vectorRetriever, bm25Retriever],
-		weights: [0.5, 0.5],
-	});
-
-	// Step 2: Create history-aware retriever
-	// This rephrases follow-up questions using chat history before searching
-	const historyAwareRetriever = await createHistoryAwareRetriever({
+/**
+ * Wraps a retriever with history awareness to rephrase follow-up questions.
+ */
+const wrapRetrieverWithHistoryAwareness = async (
+	model: ChatOllama,
+	retriever: BaseRetriever,
+) => {
+	return createHistoryAwareRetriever({
 		llm: model,
-		retriever: ensembleRetriever,
+		retriever,
 		rephrasePrompt: ChatPromptTemplate.fromMessages([
 			new MessagesPlaceholder('chat_history'),
 			['human', '{input}'],
-			[
-				'human',
-				'Given the conversation above, generate a search query to find relevant rules.',
-			],
+			['human', 'Given the conversation above, generate a search query to find relevant rules'],
 		]),
 	});
+};
 
-	// Step 3: Create the answer chain
-	// "Stuff documents chain" concatenates retrieved docs into the {context} placeholder
-	const answerChain = await createStuffDocumentsChain({
-		llm: model,
-		prompt: ChatPromptTemplate.fromMessages([
-			[
-				'system',
-				'You are the Grimoire Oracle. Answer based on these rules:\n\n{context}',
-			],
-			new MessagesPlaceholder('chat_history'),
-			['human', '{input}'],
-		]),
-	});
+/**
+ * Creates the system prompt for answer generation.
+ */
+const createAnswerPrompt = (): ChatPromptTemplate => {
+	return ChatPromptTemplate.fromMessages([
+		[
+			'system',
+			`You are the Grimoire Oracle, a TTRPG rules assistant. Answer questions using ONLY the context provided below.
 
-	// Step 4: Compose the full pipeline manually
-	// This is what createRetrievalChain does internally, but we need to do it
-	// ourselves to properly pass chat_history to the retriever.
-	//
-	// Data flow:
-	//   { input, chat_history }
-	//     → assign context (via historyAwareRetriever → ensembleRetriever)
-	//   { input, chat_history, context }
-	//     → assign answer (via answerChain)
-	//   { input, chat_history, context, answer }
+IMPORTANT: If the context does not contain the answer, say "I couldn't find that information in the rules." Do NOT make up or invent any rules, numbers, or game mechanics.
+
+Context:
+{context}`,
+		],
+		new MessagesPlaceholder('chat_history'),
+		['human', '{input}'],
+	]);
+};
+
+/**
+ * Composes the full RAG pipeline using RunnableSequence.
+ */
+const composeRAGPipeline = (
+	historyAwareRetriever: Awaited<ReturnType<typeof createHistoryAwareRetriever>>,
+	answerChain: Awaited<ReturnType<typeof createStuffDocumentsChain>>,
+	debugLog: (...args: unknown[]) => void,
+) => {
 	return RunnableSequence.from([
 		RunnablePassthrough.assign({
-			context: async (input: {
-				input: string;
-				chat_history: BaseMessage[];
-			}) => {
-				return historyAwareRetriever.invoke(input);
+			context: async (input: { input: string; chat_history: BaseMessage[] }) => {
+				debugLog('Input query:', input.input);
+				debugLog('Chat history length:', input.chat_history.length);
+
+				const docs: Document[] = await historyAwareRetriever.invoke(input);
+
+				debugLog(`Retrieved ${docs.length} documents:`);
+				docs.forEach((doc, i) => {
+					debugLog(`  [${i + 1}] ${doc.metadata.source}`);
+					debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
+				});
+
+				return docs;
 			},
 		}),
 		RunnablePassthrough.assign({
 			answer: answerChain,
 		}),
 	]);
-}
+};
+
+/**
+ * Sets up the conversational RAG chain.
+ * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
+ */
+export const setupOracle = async (options: OracleOptions = {}) => {
+	const { debug = false } = options;
+	const debugLog = (...args: unknown[]) => {
+		if (debug) console.log('[DEBUG]', ...args);
+	};
+
+	// Setup core AI components
+	const { model, vectorStore } = await createCoreComponents();
+
+	// Setup hybrid search (vector + keyword)
+	const chunks = await loadChunksForBM25();
+	const bm25Retriever = BM25Retriever.fromDocuments(chunks, { k: RETRIEVAL_K });
+	const vectorRetriever = vectorStore.asRetriever(RETRIEVAL_K);
+
+	const ensembleRetriever = new EnsembleRetriever({
+		retrievers: [vectorRetriever, bm25Retriever],
+		weights: [VECTOR_RETRIEVER_WEIGHT, BM25_RETRIEVER_WEIGHT],
+	});
+
+	// Wrap ensemble with history awareness
+	const historyAwareRetriever = await wrapRetrieverWithHistoryAwareness(
+		model,
+		ensembleRetriever,
+	);
+
+	// Setup answer generation
+	const prompt = createAnswerPrompt();
+	const answerChain = await createStuffDocumentsChain({ llm: model, prompt });
+
+	// Compose the full pipeline
+	return composeRAGPipeline(historyAwareRetriever, answerChain, debugLog);
+};
 ```
+
+**Key design choices:**
+
+- **Modular helper functions** — Each function does one thing: `createCoreComponents`, `loadChunksForBM25`, `wrapRetrieverWithHistoryAwareness`, etc. This makes the code easier to test and understand.
+
+- **Debug support built-in** — Pass `{ debug: true }` to see exactly what documents are retrieved for each query.
+
+- **Strict system prompt** — The prompt explicitly tells the LLM not to make up rules if the context doesn't contain the answer. This prevents hallucination.
 
 **Update `scripts/test-oracle.ts`:**
 
@@ -686,17 +840,24 @@ When retrieval fails, you have several strategies to try. We've implemented the 
 
 **Problem:** A chunk from `Thief.md` might contain "**Back-stab:** When attacking an unaware opponent..." but never mentions "Thief." The embedding doesn't know this is Thief content.
 
-**Solution:** Prepend document context to each chunk before embedding:
+**Solution:** Prepend document context to each chunk before embedding. This is already implemented in `scripts/ingest.ts` via `enrichChunksWithMetadata()`:
 
 ```typescript
-// In scripts/ingest.ts, after splitting
-for (const chunk of chunks) {
-	const filename = chunk.metadata.source.split('/').pop()?.replace('.md', '');
-	chunk.pageContent = `[${filename}]\n${chunk.pageContent}`;
-}
+const enrichChunksWithMetadata = (chunks: Chunk[]) => {
+	return chunks.map((chunk) => {
+		const filepath = chunk.metadata.source as string;
+		const title = extractTitleFromPath(filepath);
+		chunk.pageContent = `[${title}]\n${chunk.pageContent}`;
+		return chunk;
+	});
+};
 ```
 
-Now the chunk embeds as `[Thief]\n**Back-stab:** When attacking...` and "Thief" queries match directly.
+The `extractTitleFromPath()` function is smart about formatting:
+- Class files become `[Thief Class]` for better matching with "Tell me about the Thief class"
+- Other files use breadcrumb format: `[Monsters > Dragon]`
+
+Now the chunk embeds as `[Thief Class]\n**Back-stab:** When attacking...` and "Thief" queries match directly.
 
 **Trade-off:** Slightly reduces content space in each chunk, adds noise to embeddings.
 
@@ -1032,6 +1193,10 @@ import { setupOracle } from './oracle-logic';
 import { theme } from './theme';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
+// Nerd Font icon (requires a Nerd Font installed in your terminal)
+// If you don't have one, use a simple character like '*' or '>'
+const crystal_ball = '\udb82\udf2f';
+
 type Message = { role: 'human' | 'ai'; content: string };
 
 const App = () => {
@@ -1084,7 +1249,7 @@ const App = () => {
 			borderColor={theme.oracleTitle}
 		>
 			<Text bold color={theme.oracleTitle}>
-				THE GRIMOIRE ORACLE
+				{crystal_ball} THE GRIMOIRE ORACLE {crystal_ball}
 			</Text>
 			<Box flexDirection="column" marginY={1}>
 				{messages.slice(-6).map((m, i) => (
@@ -1094,7 +1259,7 @@ const App = () => {
 							m.role === 'human' ? theme.userResponse : theme.oracleResponse
 						}
 					>
-						{m.role === 'human' ? '> ' : '~ '}
+						{m.role === 'human' ? '❯ ' : '🧙 '}
 						{m.content}
 					</Text>
 				))}
