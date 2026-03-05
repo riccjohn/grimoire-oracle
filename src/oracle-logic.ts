@@ -179,13 +179,13 @@ const composeRAGPipeline = (
 /**
  * Sets up the conversational RAG (Retrieval Augmented Generation) chain.
  *
- * @param options.debug - Enable debug logging to see retrieved documents
+ * Set ORACLE_DEBUG=true in the environment to log retrieved documents per query.
  *
  * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
  * and returns { input, chat_history, context: Document[], answer: string }
  */
-export const setupOracle = async (options: OracleOptions = {}) => {
-	const { debug = false } = options;
+export const setupOracle = async () => {
+	const debug = process.env.DEBUG === "true";
 
 	const debugLog = (...args: unknown[]) => {
 		if (debug) console.log("[DEBUG]", ...args);
