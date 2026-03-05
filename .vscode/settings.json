@@ -1,23 +1,23 @@
 {
-  "cSpell.words": [
-    "Arize",
-    "embedder",
-    "Grimoire",
-    "HNSW",
-    "hnswlib",
-    "langchain",
-    "nomic",
-    "Ollama",
-    "textsplitters",
-    "TTRPG",
-    "vectorstores"
-  ],
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "editor.formatOnSave": true,
-  "[typescript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
-  "[javascript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  }
+	"cSpell.words": [
+		"Arize",
+		"embedder",
+		"Grimoire",
+		"HNSW",
+		"hnswlib",
+		"langchain",
+		"nomic",
+		"Ollama",
+		"textsplitters",
+		"TTRPG",
+		"vectorstores"
+	],
+	"editor.defaultFormatter": "esbenp.prettier-vscode",
+	"editor.formatOnSave": true,
+	"[typescript]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	},
+	"[javascript]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	}
 }

@@ -1,31 +1,32 @@
 {
-  "name": "grimoire-oracle",
-  "version": "0.0.1",
-  "description": "",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "dev": "tsx src/App.tsx",
-    "ingest": "tsx scripts/ingest.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "@catppuccin/palette": "^1.7.1",
-    "@langchain/community": "^1.1.5",
-    "@langchain/core": "^1.1.16",
-    "@langchain/ollama": "^1.2.1",
-    "@langchain/textsplitters": "^1.0.1",
-    "hnswlib-node": "^3.0.0",
-    "ink": "^6.6.0",
-    "langchain": "^1.2.12",
-    "react": "^19.2.4"
-  },
-  "devDependencies": {
-    "@types/node": "^25.0.10",
-    "@types/react": "^19.2.10",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
-  }
+	"name": "grimoire-oracle",
+	"version": "0.0.1",
+	"description": "",
+	"main": "index.js",
+	"type": "module",
+	"scripts": {
+		"dev": "tsx src/App.tsx",
+		"ingest": "tsx scripts/ingest.ts",
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"format": "biome check --write ."
+	},
+	"author": "",
+	"license": "ISC",
+	"dependencies": {
+		"@catppuccin/palette": "^1.7.1",
+		"@langchain/community": "^1.1.5",
+		"@langchain/core": "^1.1.16",
+		"@langchain/ollama": "^1.2.1",
+		"@langchain/textsplitters": "^1.0.1",
+		"hnswlib-node": "^3.0.0",
+		"ink": "^6.6.0",
+		"langchain": "^1.2.12",
+		"react": "^19.2.4"
+	},
+	"devDependencies": {
+		"@types/node": "^25.0.10",
+		"@types/react": "^19.2.10",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3"
+	}
 }
