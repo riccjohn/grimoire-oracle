@@ -11,10 +11,7 @@ import {
 	MessagesPlaceholder,
 } from "@langchain/core/prompts";
 import type { BaseRetriever } from "@langchain/core/retrievers";
-import {
-	RunnablePassthrough,
-	RunnableSequence,
-} from "@langchain/core/runnables";
+import { RunnableSequence } from "@langchain/core/runnables";
 import { ChatOllama, OllamaEmbeddings } from "@langchain/ollama";
 
 const RETRIEVAL_K = 3;
@@ -144,31 +141,32 @@ const composeRAGPipeline = (
 	debugLog: (...args: unknown[]) => void,
 ) => {
 	return RunnableSequence.from([
-		// Retrieve relevant documents using hybrid search (vector + keyword)
-		// The historyAwareRetriever rephrases queries, then ensembleRetriever combines both search methods
-		RunnablePassthrough.assign({
-			context: async (input: {
-				input: string;
-				chat_history: BaseMessage[];
-			}) => {
-				debugLog("Input query:", input.input);
-				debugLog("Chat history length:", input.chat_history.length);
+		// Step 1: Retrieve relevant documents using hybrid search (vector + keyword)
+		// The historyAwareRetriever rephrases queries using chat history,
+		// then the ensembleRetriever combines vector + BM25 keyword results
+		async (input: { input: string; chat_history: BaseMessage[] }) => {
+			debugLog("Input query:", input.input);
+			debugLog("Chat history length:", input.chat_history.length);
 
-				const docs: Document[] = await historyAwareRetriever.invoke(input);
+			const docs: Document[] = await historyAwareRetriever.invoke(input);
 
-				debugLog(`Retrieved ${docs.length} documents:`);
-				docs.forEach((doc, i) => {
-					debugLog(`  [${i + 1}] ${doc.metadata.source}`);
-					debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
-				});
+			debugLog(`Retrieved ${docs.length} documents:`);
+			docs.forEach((doc, i) => {
+				debugLog(`  [${i + 1}] ${doc.metadata.source}`);
+				debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
+			});
 
-				return docs;
-			},
-		}),
-		// Generate answer using retrieved context
-		RunnablePassthrough.assign({
-			answer: answerChain,
-		}),
+			return { ...input, context: docs };
+		},
+		// Step 2: Generate answer using the retrieved context
+		async (input: {
+			input: string;
+			chat_history: BaseMessage[];
+			context: Document[];
+		}) => {
+			const answer = (await answerChain.invoke(input)) as string;
+			return { ...input, answer };
+		},
 	]);
 };
 
