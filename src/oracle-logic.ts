@@ -13,10 +13,16 @@ import {
 import type { BaseRetriever } from "@langchain/core/retrievers";
 import { RunnableSequence } from "@langchain/core/runnables";
 import { ChatOllama, OllamaEmbeddings } from "@langchain/ollama";
-
-const RETRIEVAL_K = 3;
-const VECTOR_RETRIEVER_WEIGHT = 0.5;
-const BM25_RETRIEVER_WEIGHT = 0.5;
+import {
+	BM25_RETRIEVER_WEIGHT,
+	EMBEDDINGS_MODEL,
+	GRIMOIRE_CHUNKS_PATH,
+	GRIMOIRE_INDEX_PATH,
+	LLM_MODEL,
+	LLM_TEMPERATURE,
+	RETRIEVAL_K,
+	VECTOR_RETRIEVER_WEIGHT,
+} from "@src/constants";
 
 type SerializedChunk = {
 	pageContent: string;
@@ -37,9 +43,9 @@ type CoreComponents = {
  * and loads the vector store for semantic retrieval.
  */
 const createCoreComponents = async (): Promise<CoreComponents> => {
-	const model = new ChatOllama({ model: "llama3", temperature: 0.2 });
-	const embedder = new OllamaEmbeddings({ model: "nomic-embed-text" });
-	const vectorStore = await HNSWLib.load("./grimoire_index", embedder);
+	const model = new ChatOllama({ model: LLM_MODEL, temperature: LLM_TEMPERATURE });
+	const embedder = new OllamaEmbeddings({ model: EMBEDDINGS_MODEL });
+	const vectorStore = await HNSWLib.load(GRIMOIRE_INDEX_PATH, embedder);
 
 	return { model, vectorStore };
 };
@@ -50,7 +56,7 @@ const createCoreComponents = async (): Promise<CoreComponents> => {
  */
 const loadChunksForBM25 = async (): Promise<Document[]> => {
 	const chunksData: SerializedChunk[] = JSON.parse(
-		await readFile("./grimoire_index/grimoire_chunks.json", "utf-8"),
+		await readFile(GRIMOIRE_CHUNKS_PATH, "utf-8"),
 	);
 
 	return chunksData.map((chunk) => {

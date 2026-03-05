@@ -5,17 +5,20 @@ import { HNSWLib } from "@langchain/community/vectorstores/hnswlib";
 import type { Document } from "@langchain/core/documents";
 import { OllamaEmbeddings } from "@langchain/ollama";
 import { MarkdownTextSplitter } from "@langchain/textsplitters";
-
-const CHUNK_SIZE = 1000;
-const CHUNK_OVERLAP = 100;
-const MIN_CHUNK_SIZE = 100;
-const GRIMOIRE_INDEX_PATH = "./grimoire_index";
-const GRIMOIRE_CHUNKS_PATH = "./grimoire_index/grimoire_chunks.json";
+import {
+	CHUNK_OVERLAP,
+	CHUNK_SIZE,
+	EMBEDDINGS_MODEL,
+	GRIMOIRE_CHUNKS_PATH,
+	GRIMOIRE_INDEX_PATH,
+	MIN_CHUNK_SIZE,
+	VAULT_PATH,
+} from "@src/constants";
 
 type Chunk = Document<Record<string, unknown>>;
 
 const main = async () => {
-	const docs = await loadVaultDocs("./vault");
+	const docs = await loadVaultDocs(VAULT_PATH);
 	const chunks = await splitDocsIntoChunks(docs);
 	const mergedChunks = mergeSmallChunks(chunks);
 	const enrichedChunks = enrichChunksWithMetadata(mergedChunks);
@@ -136,7 +139,7 @@ const enrichChunksWithMetadata = (chunks: Chunk[]) => {
  */
 const createVectorIndex = async (chunks: Chunk[], pathToStore: string) => {
 	console.log("🧠 Creating embeddings (this may take a moment)...");
-	const embedder = new OllamaEmbeddings({ model: "nomic-embed-text" });
+	const embedder = new OllamaEmbeddings({ model: EMBEDDINGS_MODEL });
 	const vectorStore = await HNSWLib.fromDocuments(chunks, embedder);
 
 	await vectorStore.save(pathToStore);
