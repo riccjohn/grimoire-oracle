@@ -3,10 +3,7 @@ import {
   ChatPromptTemplate,
   MessagesPlaceholder,
 } from '@langchain/core/prompts';
-import {
-  RunnablePassthrough,
-  RunnableSequence,
-} from '@langchain/core/runnables';
+import { RunnableSequence } from '@langchain/core/runnables';
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { createStuffDocumentsChain } from '@langchain/classic/chains/combine_documents';
 import { createHistoryAwareRetriever } from '@langchain/classic/chains/history_aware_retriever';
@@ -168,30 +165,30 @@ const composeRAGPipeline = (
   debugLog: (...args: unknown[]) => void,
 ) => {
   return RunnableSequence.from([
-    // Retrieve relevant documents using hybrid search (vector + keyword)
-    // The historyAwareRetriever rephrases queries, then ensembleRetriever combines both search methods
-    RunnablePassthrough.assign({
-      context: async (input: {
-        input: string;
-        chat_history: BaseMessage[];
-      }) => {
-        debugLog('Input query:', input.input);
-        debugLog('Chat history length:', input.chat_history.length);
+    // Step 1: Retrieve relevant documents — explicitly returns all fields needed downstream
+    async (input: { input: string; chat_history: BaseMessage[] }) => {
+      debugLog('Input query:', input.input);
+      debugLog('Chat history length:', input.chat_history.length);
 
-        const docs: Document[] = await historyAwareRetriever.invoke(input);
+      const context: Document[] = await historyAwareRetriever.invoke(input);
 
-        debugLog(`Retrieved ${docs.length} documents:`);
-        docs.forEach((doc, i) => {
-          debugLog(`  [${i + 1}] ${doc.metadata.source}`);
-          debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
-        });
+      debugLog(`Retrieved ${context.length} documents:`);
+      context.forEach((doc, i) => {
+        debugLog(`  [${i + 1}] ${doc.metadata.source}`);
+        debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
+      });
 
-        return docs;
-      },
-    }),
-    // Generate answer using retrieved context
-    RunnablePassthrough.assign({
-      answer: answerChain,
+      return { input: input.input, chat_history: input.chat_history, context };
+    },
+
+    // Step 2: Generate answer using retrieved context
+    async (prev: {
+      input: string;
+      chat_history: BaseMessage[];
+      context: Document[];
+    }) => ({
+      ...prev,
+      answer: await answerChain.invoke(prev),
     }),
   ]);
 };
