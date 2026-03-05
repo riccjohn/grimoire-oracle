@@ -1,3 +1,4 @@
+import { appendFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createStuffDocumentsChain } from "@langchain/classic/chains/combine_documents";
 import { createHistoryAwareRetriever } from "@langchain/classic/chains/history_aware_retriever";
@@ -177,19 +178,35 @@ const composeRAGPipeline = (
 };
 
 /**
+ * Creates a debug logger that writes to a file (cleared each run).
+ * Disabled in production. In development, defaults to ./oracle-debug.log
+ * unless DEBUG_FILE is set to a different path.
+ */
+const createDebugLogger = (): ((...args: unknown[]) => void) => {
+	if (process.env.NODE_ENV === "production") {
+		return () => {};
+	}
+
+	const debugFile = process.env.DEBUG_FILE ?? "./oracle-debug.log";
+
+	writeFileSync(debugFile, "");
+
+	return (...args: unknown[]) => {
+		appendFileSync(debugFile, `[DEBUG] ${args.map(String).join(" ")}\n`);
+	};
+};
+
+/**
  * Sets up the conversational RAG (Retrieval Augmented Generation) chain.
  *
- * Set ORACLE_DEBUG=true in the environment to log retrieved documents per query.
+ * Logs retrieved documents to ./oracle-debug.log by default (disabled in production).
+ * Override the path with DEBUG_FILE.
  *
  * Returns a chain that accepts { input: string, chat_history: BaseMessage[] }
  * and returns { input, chat_history, context: Document[], answer: string }
  */
 export const setupOracle = async () => {
-	const debug = process.env.DEBUG === "true";
-
-	const debugLog = (...args: unknown[]) => {
-		if (debug) console.log("[DEBUG]", ...args);
-	};
+	const debugLog = createDebugLogger();
 
 	// Setup core AI components
 	const { model, vectorStore } = await createCoreComponents();

@@ -7,3 +7,5 @@ grimoire_index/
 
 .env*
 !.env.example
+
+oracle-debug.log
