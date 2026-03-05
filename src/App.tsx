@@ -34,10 +34,10 @@ const App = () => {
 		setStatus("loading");
 
 		// Convert our messages to LangChain format for chat_history
-		const chatHistory = messages.map((m) =>
-			m.role === "human"
-				? new HumanMessage(m.content)
-				: new AIMessage(m.content),
+		const chatHistory = messages.map((message) =>
+			message.role === "human"
+				? new HumanMessage(message.content)
+				: new AIMessage(message.content),
 		);
 		const response = await oracle.invoke({
 			input: submittedQuery,
@@ -81,15 +81,17 @@ const App = () => {
 				{crystal_ball} THE GRIMOIRE ORACLE {crystal_ball}
 			</Text>
 			<Box flexDirection="column" marginY={1}>
-				{messages.slice(-6).map((m, i) => (
+				{messages.slice(-6).map((message) => (
 					<Text
-						key={i}
+						key={crypto.randomUUID()}
 						color={
-							m.role === "human" ? theme.userResponse : theme.oracleResponse
+							message.role === "human"
+								? theme.userResponse
+								: theme.oracleResponse
 						}
 					>
-						{m.role === "human" ? "❯ " : "🧙 "}
-						{m.content}
+						{message.role === "human" ? "❯ " : "🧙 "}
+						{message.content}
 					</Text>
 				))}
 			</Box>

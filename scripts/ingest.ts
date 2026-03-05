@@ -96,7 +96,7 @@ const mergeSmallChunks = (chunks: Document<Record<string, unknown>>[]) => {
 					merged: [
 						...acc.merged,
 						{
-							pageContent: current.pageContent + "\n\n" + next.pageContent,
+							pageContent: `${current.pageContent}\n\n${next.pageContent}`,
 							metadata: current.metadata,
 						},
 					],
