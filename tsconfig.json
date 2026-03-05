@@ -42,6 +42,9 @@
 		"skipLibCheck": true,
 
 		// Path Mapping
-		"baseUrl": "."
+		"baseUrl": ".",
+		"paths": {
+			"@src/*": ["src/*"]
+		}
 	}
 }
