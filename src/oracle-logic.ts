@@ -16,15 +16,26 @@ import { readFile } from 'node:fs/promises';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Document } from '@langchain/core/documents';
 import type { BaseRetriever } from '@langchain/core/retrievers';
-
-const RETRIEVAL_K = 3;
-const VECTOR_RETRIEVER_WEIGHT = 0.5;
-const BM25_RETRIEVER_WEIGHT = 0.5;
+import {
+  CHAT_MODEL,
+  TEMPERATURE,
+  EMBEDDING_MODEL,
+  RETRIEVAL_K,
+  VECTOR_RETRIEVER_WEIGHT,
+  BM25_RETRIEVER_WEIGHT,
+} from '@src/constants.js';
 
 type SerializedChunk = {
   pageContent: string;
   metadata: Record<string, unknown>;
 };
+
+type HistoryAwareRetriever = Awaited<
+  ReturnType<typeof createHistoryAwareRetriever>
+>;
+type StuffDocumentsChain = Awaited<
+  ReturnType<typeof createStuffDocumentsChain>
+>;
 
 type OracleOptions = {
   debug?: boolean;
@@ -40,11 +51,20 @@ type CoreComponents = {
  * and loads the vector store for semantic retrieval.
  */
 const createCoreComponents = async (): Promise<CoreComponents> => {
-  const model = new ChatOllama({ model: 'llama3', temperature: 0.2 });
-  const embedder = new OllamaEmbeddings({ model: 'nomic-embed-text' });
-  const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
+  try {
+    const model = new ChatOllama({
+      model: CHAT_MODEL,
+      temperature: TEMPERATURE,
+    });
+    const embedder = new OllamaEmbeddings({ model: EMBEDDING_MODEL });
+    const vectorStore = await HNSWLib.load('./grimoire_index', embedder);
 
-  return { model, vectorStore };
+    return { model, vectorStore };
+  } catch (error) {
+    throw new Error(
+      `Failed to create core components: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 };
 
 /**
@@ -52,18 +72,24 @@ const createCoreComponents = async (): Promise<CoreComponents> => {
  * These are the same chunks used during vector store creation.
  */
 const loadChunksForBM25 = async (): Promise<Document[]> => {
-  const chunksData: SerializedChunk[] = JSON.parse(
-    await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
-  );
+  try {
+    const chunksData: SerializedChunk[] = JSON.parse(
+      await readFile('./grimoire_index/grimoire_chunks.json', 'utf-8'),
+    );
 
-  return chunksData.map((chunk) => {
-    const { pageContent, metadata } = chunk;
+    return chunksData.map((chunk) => {
+      const { pageContent, metadata } = chunk;
 
-    return new Document({
-      pageContent,
-      metadata,
+      return new Document({
+        pageContent,
+        metadata,
+      });
     });
-  });
+  } catch (error) {
+    throw new Error(
+      `Failed to load chunks for BM25: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 };
 
 /**
@@ -137,10 +163,8 @@ const createAnswerChain = async (
  *   { input, chat_history, context, answer }
  */
 const composeRAGPipeline = (
-  historyAwareRetriever: Awaited<
-    ReturnType<typeof createHistoryAwareRetriever>
-  >,
-  answerChain: Awaited<ReturnType<typeof createStuffDocumentsChain>>,
+  historyAwareRetriever: HistoryAwareRetriever,
+  answerChain: StuffDocumentsChain,
   debugLog: (...args: unknown[]) => void,
 ) => {
   return RunnableSequence.from([
