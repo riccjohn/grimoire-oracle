@@ -186,10 +186,18 @@ const composeRAGPipeline = (
       input: string;
       chat_history: BaseMessage[];
       context: Document[];
-    }) => ({
-      ...prev,
-      answer: await answerChain.invoke(prev),
-    }),
+    }): Promise<{
+      input: string;
+      chat_history: BaseMessage[];
+      context: Document[];
+      answer: string;
+    }> => {
+      const answer = await answerChain.invoke(prev);
+      if (typeof answer !== 'string') {
+        throw new Error(`Oracle chain returned unexpected type: ${typeof answer}`);
+      }
+      return { ...prev, answer };
+    },
   ]);
 };
 

@@ -122,6 +122,7 @@ const mergeSmallChunks = (chunks: Document<Record<string, unknown>>[]) => {
 const enrichChunksWithMetadata = (chunks: Chunk[]) => {
   return chunks.map((chunk) => {
     const filepath = chunk.metadata.source;
+    if (typeof filepath !== 'string') return chunk;
     const title = extractTitleFromPath(filepath);
     chunk.pageContent = `[${title}]\n${chunk.pageContent}`;
     return chunk;
