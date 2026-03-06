@@ -3,7 +3,7 @@ import { setupOracle } from "../src/oracle-logic.js";
 
 const main = async () => {
 	console.log("🔮 Starting oracle...\n");
-	const oracle = await setupOracle({ debug: true });
+	const oracle = await setupOracle();
 
 	const firstQuestion = "Tell me about the Thief class";
 	console.log(`You: ${firstQuestion}`);

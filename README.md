@@ -87,6 +87,7 @@ src/
   oracle-logic.ts  LangChain RAG pipeline
   App.tsx          Terminal UI (React/Ink)
 grimoire_index/ Generated vector store (created by ingest)
+docs/plans/     Implementation plans and architecture decision records
 ```
 
 ---

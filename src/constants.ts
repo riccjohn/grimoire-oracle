@@ -2,9 +2,12 @@
 export const LLM_MODEL = "llama3";
 export const EMBEDDINGS_MODEL = "nomic-embed-text";
 export const LLM_TEMPERATURE = 0.2;
+export const REPHRASE_TEMPERATURE = 0;
 
 // Retrieval tuning
-export const RETRIEVAL_K = 3;
+export const RETRIEVAL_K = 8;
+
+// NOTE: VECTOR_RETRIEVER_WEIGHT + BM25_RETRIEVER_WEIGHT should equal 1.0
 export const VECTOR_RETRIEVER_WEIGHT = 0.5;
 export const BM25_RETRIEVER_WEIGHT = 0.5;
 
