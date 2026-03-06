@@ -21,6 +21,7 @@ import {
 	GRIMOIRE_INDEX_PATH,
 	LLM_MODEL,
 	LLM_TEMPERATURE,
+	REPHRASE_TEMPERATURE,
 	RETRIEVAL_K,
 	VECTOR_RETRIEVER_WEIGHT,
 } from "@src/constants";
@@ -28,10 +29,6 @@ import {
 type SerializedChunk = {
 	pageContent: string;
 	metadata: Record<string, unknown>;
-};
-
-type OracleOptions = {
-	debug?: boolean;
 };
 
 type CoreComponents = {
@@ -44,11 +41,26 @@ type CoreComponents = {
  * and loads the vector store for semantic retrieval.
  */
 const createCoreComponents = async (): Promise<CoreComponents> => {
-	const model = new ChatOllama({ model: LLM_MODEL, temperature: LLM_TEMPERATURE });
+	const model = new ChatOllama({
+		model: LLM_MODEL,
+		temperature: LLM_TEMPERATURE,
+	});
 	const embedder = new OllamaEmbeddings({ model: EMBEDDINGS_MODEL });
 	const vectorStore = await HNSWLib.load(GRIMOIRE_INDEX_PATH, embedder);
 
 	return { model, vectorStore };
+};
+
+/**
+ * Creates a low-temperature model variant for deterministic query rephrasing.
+ * Using temperature 0 ensures the same user question always produces the same
+ * search query, eliminating a key source of retrieval inconsistency.
+ */
+const createRephraseModel = (): ChatOllama => {
+	return new ChatOllama({
+		model: LLM_MODEL,
+		temperature: REPHRASE_TEMPERATURE,
+	});
 };
 
 /**
@@ -89,7 +101,9 @@ const wrapRetrieverWithHistoryAwareness = async (
 			["human", "{input}"],
 			[
 				"human",
-				"Given the conversation above, generate a search query to find relevant rules",
+				"Given the conversation above, generate a concise search query to look up relevant rules. " +
+					"If the question is a follow-up on the same topic (e.g. 'what about elves?' after discussing dwarves), rephrase it with the missing context. " +
+					"If the question introduces a clearly different topic (e.g. switching from spells to equipment costs), return the question as-is without adding context from the history.",
 			],
 		]),
 	});
@@ -160,7 +174,7 @@ const composeRAGPipeline = (
 			debugLog(`Retrieved ${docs.length} documents:`);
 			docs.forEach((doc, i) => {
 				debugLog(`  [${i + 1}] ${doc.metadata.source}`);
-				debugLog(`      "${doc.pageContent.slice(0, 100)}..."`);
+				debugLog(`      "${doc.pageContent.slice(0, 200)}..."`);
 			});
 
 			return { ...input, context: docs };
@@ -192,7 +206,8 @@ const createDebugLogger = (): ((...args: unknown[]) => void) => {
 	writeFileSync(debugFile, "");
 
 	return (...args: unknown[]) => {
-		appendFileSync(debugFile, `[DEBUG] ${args.map(String).join(" ")}\n`);
+		const timestamp = new Date().toISOString();
+		appendFileSync(debugFile, `[${timestamp}] ${args.map(String).join(" ")}\n`);
 	};
 };
 
@@ -210,6 +225,7 @@ export const setupOracle = async () => {
 
 	// Setup core AI components
 	const { model, vectorStore } = await createCoreComponents();
+	const rephraseModel = createRephraseModel();
 
 	// Setup hybrid search (vector + keyword)
 	const chunks = await loadChunksForBM25();
@@ -221,9 +237,9 @@ export const setupOracle = async () => {
 		weights: [VECTOR_RETRIEVER_WEIGHT, BM25_RETRIEVER_WEIGHT],
 	});
 
-	// Wrap ensemble with history awareness
+	// Wrap ensemble with history awareness, using deterministic rephrasing
 	const historyAwareRetriever = await wrapRetrieverWithHistoryAwareness(
-		model,
+		rephraseModel,
 		ensembleRetriever,
 	);
 

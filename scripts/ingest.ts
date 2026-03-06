@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { DirectoryLoader } from "@langchain/classic/document_loaders/fs/directory";
 import { TextLoader } from "@langchain/classic/document_loaders/fs/text";
 import { HNSWLib } from "@langchain/community/vectorstores/hnswlib";
-import type { Document } from "@langchain/core/documents";
+import { Document } from "@langchain/core/documents";
 import { OllamaEmbeddings } from "@langchain/ollama";
 import { MarkdownTextSplitter } from "@langchain/textsplitters";
 import {
@@ -17,10 +17,81 @@ import {
 
 type Chunk = Document<Record<string, unknown>>;
 
+const parseTableCells = (row: string): string[] =>
+	row
+		.split("|")
+		.slice(1, -1)
+		.map((cell) => cell.trim());
+
+const isAlignmentRow = (row: string): boolean =>
+	/^\|\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|$/.test(row.trim());
+
+const convertTableToKeyValue = (tableLines: string[]): string[] => {
+	const headerRow = tableLines[0];
+	if (tableLines.length < 2 || headerRow === undefined) return tableLines;
+
+	const headers = parseTableCells(headerRow);
+	const result: string[] = [];
+
+	for (let i = 1; i < tableLines.length; i++) {
+		const row = tableLines[i];
+		if (row === undefined || isAlignmentRow(row)) continue;
+		const cells = parseTableCells(row);
+		result.push(headers.map((h, idx) => `${h}: ${cells[idx] ?? ""}`).join(" | "));
+	}
+
+	return result;
+};
+
+const normalizeMarkdownTables = (content: string): string => {
+	const lines = content.split("\n");
+	const result: string[] = [];
+	let tableBuffer: string[] = [];
+
+	const flushTable = () => {
+		if (tableBuffer.length > 0) {
+			result.push(...convertTableToKeyValue(tableBuffer));
+			tableBuffer = [];
+		}
+	};
+
+	for (const line of lines) {
+		if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+			tableBuffer.push(line);
+		} else {
+			flushTable();
+			result.push(line);
+		}
+	}
+	flushTable();
+
+	return result.join("\n");
+};
+
+const normalizeChunkTables = (chunks: Chunk[]): Chunk[] =>
+	chunks.map((chunk) => ({
+		...chunk,
+		pageContent: normalizeMarkdownTables(chunk.pageContent),
+	}));
+
+const splitDocsByHeaders = (docs: Chunk[]): Chunk[] => {
+	return docs.flatMap((doc) => {
+		const parts = doc.pageContent.split(/\n(?=## )/);
+		return parts
+			.filter((part) => part.trim().length > 0)
+			.map(
+				(part) =>
+					new Document({ pageContent: part.trim(), metadata: doc.metadata }),
+			);
+	});
+};
+
 const main = async () => {
 	const docs = await loadVaultDocs(VAULT_PATH);
-	const chunks = await splitDocsIntoChunks(docs);
-	const mergedChunks = mergeSmallChunks(chunks);
+	const sections = splitDocsByHeaders(docs);
+	const chunks = await splitDocsIntoChunks(sections);
+	const normalizedChunks = normalizeChunkTables(chunks);
+	const mergedChunks = mergeSmallChunks(normalizedChunks);
 	const enrichedChunks = enrichChunksWithMetadata(mergedChunks);
 
 	await createVectorIndex(enrichedChunks, GRIMOIRE_INDEX_PATH);
